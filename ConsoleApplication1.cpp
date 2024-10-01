@@ -24,6 +24,9 @@
 #include <typeinfo>
 #include <ctime>
 #include <algorithm>
+#include <stdexcept>
+#include <cfenv>
+
 
 class ExponentialMovingAverage
 {
@@ -111,6 +114,7 @@ int operatingMode = 0;
 
 bool exp_start_time_saved_ = false;
 double exp_start_time_ = 0.0;
+int unemployed = 0;
 
 // FOR DEBUGGING AND SIM 
 Eigen::VectorXd q_sim = Eigen::VectorXd::Zero(numTubes * numConfigParams);
@@ -285,6 +289,53 @@ void readCSVDub(const std::string& filename, std::map<int, Eigen::Matrix3d>& toR
         toReturn[othercount] = input;
         othercount++;
     }
+}
+
+void writeCSV(const std::string& filename, const std::vector<Eigen::VectorXd>& data) {
+    std::ofstream file(filename);
+
+    if (!file.is_open()) {
+        throw std::runtime_error("Unable to open file: " + filename);
+    }
+
+    for (const auto& row : data) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            file << row[i];
+            if (i < row.size() - 1) {
+                file << ",";
+            }
+        }
+        file << "\n";
+    }
+
+    file.close();
+}
+
+void writeVectorToCSV(const std::string& filename, const Eigen::VectorXd& vector) {
+    std::ofstream file;
+
+    //if (!file.is_open()) {
+    //    throw std::runtime_error("Unable to open file: " + filename);
+    //}
+
+    file.open(filename, std::ios::app);
+
+    file << vector.format(Eigen::IOFormat(
+        Eigen::FullPrecision,
+        Eigen::DontAlignCols,
+        ",",
+        "\n"
+    ));
+    file << "\n";
+    file.close();
+}
+
+int find_element(std::vector<double> toSearch, double toFind) {
+    int toReturn = -1;
+    for (int i = 0; i < toSearch.size(); ++i) {
+        toReturn = (toSearch[i] == toFind) ? i : toReturn;
+    }
+    return toReturn;
 }
 
 /* void directKinematicsV2_f(const Eigen::VectorXd& q,
@@ -1326,6 +1377,8 @@ Eigen::MatrixXd generateJacobian(Eigen::VectorXd q) {
     }
 
     Eigen::MatrixXd J(6, numSheaths * numConfigParams); // Jacobian matrix, 6x3n
+    J.setZero();
+
     Eigen::Vector3d tip_pos; // position of tip of robot
     Eigen::Matrix3d temp_matrix = Eigen::Matrix3d::Identity(); // placeholder matrix
     forwardKinematics(q, tip_pos, temp_matrix); // get global robot tip position
@@ -1489,18 +1542,18 @@ Eigen::VectorXd inverseKinematics(Eigen::VectorXd &q, Eigen::VectorXd &qDot,
     int numSheaths = q.rows() / numConfigParams;
     // these must be hardcoded
     Eigen::VectorXd globalJointLowLimits(numConfigParams * numSheaths); // minimum allowable lengths/angles of the joints
-    globalJointLowLimits << 0.0000000000000001, -1000.0 * M_PI, lengthLowLimit, -q(5) / minAllowedRadii, -1000.0 * M_PI, lengthLowLimit, 0.001, 0.0, 1.0;
+    globalJointLowLimits << 0.0000000000000001, -1000.0 * M_PI, lengthLowLimit, -q(5) / minAllowedRadii, -1000.0 * M_PI, lengthLowLimit, -q(8) / minAllowedRadii, -1000.0 * M_PI, lengthLowLimit;
 
     // these must be hardcoded
     Eigen::VectorXd globalJointHighLimits(numConfigParams * numSheaths); // maximum allowable lengths/angles of the joints
-    globalJointHighLimits << q(2) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit, q(5) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit, 0.001, 0.0, 1.0;
+    globalJointHighLimits << q(2) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit, q(5) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit, q(8) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit;
     
     // perform differential kinematics calculation to obtain Jacobian
     Eigen::MatrixXd J_normal = generateJacobian(q);
 
     Eigen::MatrixXd J_use; // Jacobian that will be used for robot control
     Eigen::VectorXd tipVelocityDesired_use; // desired input that will be used for robot control
-    std::vector<int> locked_joints; // non-actuated joints
+    std::vector<double> locked_joints; // non-actuated joints
 
     switch (mode) {
     case 0: // only position (3 DOF) with 5 DOF (no phi1 and sheath3)
@@ -1568,6 +1621,7 @@ Eigen::VectorXd inverseKinematics(Eigen::VectorXd &q, Eigen::VectorXd &qDot,
 
     int loop_counter = 0;
     Eigen::VectorXd joints_exceeded(numSheaths * numConfigParams);
+    joints_exceeded.setZero();
 
     if (applyJointLimits) {
         bool finishedChecking = false;
@@ -1579,27 +1633,28 @@ Eigen::VectorXd inverseKinematics(Eigen::VectorXd &q, Eigen::VectorXd &qDot,
             // calculate joint limits dynamically
             for (int i = 0; i < numSheaths; ++i) {
                 if (i > 0) {
-                    limitLowJoint(i * numConfigParams) = std::max(globalJointLowLimits(i * numSheaths), -1.0 * (q(i * numSheaths + 2) / minAllowedRadii)); // theta
+                    limitLowJoint(i * numConfigParams) = std::max(globalJointLowLimits(i * numConfigParams), -1.0 * (q(i * numConfigParams + 2) / minAllowedRadii)); // theta
                 }
                 else {
-                    limitLowJoint(i * numConfigParams) = std::max(globalJointLowLimits(i * numSheaths), 0.0); // theta
+                    limitLowJoint(i * numConfigParams) = std::max(globalJointLowLimits(i * numConfigParams), 0.0); // theta
                 }
-                limitLowJoint(i * numConfigParams + 2) = std::max(globalJointLowLimits(i * numSheaths + 2), (q(i * numSheaths) * minAllowedRadii)); // length
+                limitLowJoint(i * numConfigParams + 2) = std::max(globalJointLowLimits(i * numConfigParams + 2), (q(i * numConfigParams) * minAllowedRadii)); // length
 
-                limitHighJoint(i * numConfigParams) = std::min(globalJointHighLimits(i * numSheaths), (q(i * numSheaths + 2) / minAllowedRadii)); // theta
-                limitHighJoint(i * numConfigParams + 2) = globalJointHighLimits(i * numSheaths + 2); // length
+                limitHighJoint(i * numConfigParams) = std::min(globalJointHighLimits(i * numConfigParams), (q(i * numConfigParams + 2) / minAllowedRadii)); // theta
+                limitHighJoint(i * numConfigParams + 2) = globalJointHighLimits(i * numConfigParams + 2); // length
             }
 
-            int exceededJoint = numJoints;
+            int exceededJoint = 10;
+            // 
             // find and save first joint that exceeds previously calculated joint limits
             for (int j = 0; j < numJoints; ++j) {
                 if ((j % numConfigParams) != 1 &&
-                    (std::find(locked_joints.begin(), locked_joints.end(), j) == locked_joints.end()) &&
+                    (find_element(locked_joints, j) == -1) &&
                     joints_exceeded(j) == 0) {
-                    if (q(j) < (limitLowJoint(j) + cushion((j % numConfigParams))) ||
-                        q(j) > (limitHighJoint(j) - cushion(j % numConfigParams))) {
+                    if (qNew(j) < (limitLowJoint(j) + cushion((j % numConfigParams))) ||
+                        qNew(j) > (limitHighJoint(j) - cushion(j % numConfigParams))) {
                         exceededJoint = j;
-                        if (q(j) > limitLowJoint(j) || q(j) < limitHighJoint(j)) {
+                        if (qNew(j) > limitLowJoint(j) || qNew(j) < limitHighJoint(j)) {
                             joints_exceeded(j) = 1;
                         }
                         break;
@@ -1607,7 +1662,8 @@ Eigen::VectorXd inverseKinematics(Eigen::VectorXd &q, Eigen::VectorXd &qDot,
                 }
             }
 
-            if (exceededJoint != numJoints) { // if a joint has exceeded the limits
+            if (exceededJoint != 10) { // if a joint has exceeded the limits
+                //unemployed++;
                 J_use.col(exceededJoint) = Eigen::VectorXd::Zero(J_use.rows()); // wipe the column in the Jacobian of the current param
                 nullspaceObjectiveVector(exceededJoint) = 0.0; // wipe q_0_dot
 
@@ -2846,6 +2902,8 @@ int main()
         std::cout << "hello" << std::endl;
     } */
 
+    fesetround(FE_TONEAREST); // Round to nearest (even) like MATLAB
+
     theta_init_ << deg2rad(25), deg2rad(25), 0.00005; // initial bending angles of each sheath
     phi_init_ << 180.0 * M_PI / 180.0, -90.0 * M_PI / 180.0, 0.0 * M_PI / 180.0; // initial bending plane offsets of each sheath
     length_init_ << 30.0, 30.0, 30.0; // initial length of the steerable section of each sheath in mm
@@ -2890,7 +2948,10 @@ int main()
 
     //std::cout << generateJacobian(q_sim) << std::endl;
 
-    for (int j = 0; j < 10000; ++j) {
+    std::vector<Eigen::VectorXd> printqsims;
+    std::vector<Eigen::VectorXd> printqdotsims;
+
+    for (int j = 0; j < 25000; ++j) {
         auto time = j * deltaT;
         Eigen::Matrix3d dummyRotMM_i_wrtG = Eigen::Matrix3d::Identity();
         
@@ -2906,12 +2967,45 @@ int main()
         Eigen::VectorXd displacementCalc(nOfDrivenMotors);
         displacementCalc = Eigen::VectorXd::Zero(nOfDrivenMotors); // motor displacement
 
+        //if (j >= 15000 && j <= 15500) {
+        //    std::cout << j << std::endl;
+        //    std::cout << "qsim: " << q_sim << std::endl;
+        //    std::cout << "qDot: " << qDot_sim << std::endl;
+        //    std::cout << "***********************" << std::endl;
+        //}
+
+        //writeVectorToCSV("C:/Users/ch256744/Downloads/q_output_precise.csv", q_sim);
+        //writeVectorToCSV("C:/Users/ch256744/Downloads/qdot_output_precise.csv", qDot_sim);
+        //writeVectorToCSV("C:/Users/ch256744/Downloads/tipspeed_output_precise.csv", tipVelocityDesired);
+        
+
         q_sim = inverseKinematics(q_sim, qDot_sim, displacement_sim, tipVelocityDesired, operatingMode, outOfWorkspace);
 
+
         forwardKinematics(q_sim, pTip_sim, dummyRotMM_i_wrtG);
+        writeVectorToCSV("C:/Users/ch256744/Downloads/endtip_precise.csv", pTip_sim);
+        unemployed += outOfWorkspace;
     }
+
+    //q_sim << 0.657331119677952, 3.14159265358979, 46.1281520431707, 0.742844152344368, -1.74947466638556, 49.4991203380709, 5.00000000000000e-05, 0.0, 30.0;
+    //Eigen::VectorXd tipVelocityDesired(6);
+    //tipVelocityDesired << -0.225868151611763, -0.267126373899629, 0.202975859771470, 0.0, 0.0, 0.0;
+
+    //q_sim = inverseKinematics(q_sim, qDot_sim, displacement_sim, tipVelocityDesired, operatingMode, outOfWorkspace);
+
     std::cout << "new ptip: " << pTip_sim << std::endl;
     std::cout << "qsim: " << q_sim << std::endl;
+    std::cout << "unemployed: " << unemployed << std::endl;
+    std::cout << "qDot: " << qDot_sim << std::endl;
+
+    //std::vector<double> locked_joints;
+    //locked_joints.push_back(1);
+    //locked_joints.push_back(6);
+    //locked_joints.push_back(7);
+    //locked_joints.push_back(8);
+    //
+
+    //std::cout << find_element(locked_joints, 1) << std::endl;
 };
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
