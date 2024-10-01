@@ -1489,11 +1489,11 @@ Eigen::VectorXd inverseKinematics(Eigen::VectorXd &q, Eigen::VectorXd &qDot,
     int numSheaths = q.rows() / numConfigParams;
     // these must be hardcoded
     Eigen::VectorXd globalJointLowLimits(numConfigParams * numSheaths); // minimum allowable lengths/angles of the joints
-    globalJointLowLimits << 0.0000000000000001, -1000.0 * M_PI, lengthLowLimit, -q(5) / minAllowedRadii, -1000.0 * M_PI, lengthLowLimit, 0.001, 0.0, 1.0;
+    globalJointLowLimits << 0.0000000000000001, -1000.0 * M_PI, lengthLowLimit, -q(5) / minAllowedRadii, -1000.0 * M_PI, lengthLowLimit, -q(8) / minAllowedRadii, -1000.0 * M_PI, lengthLowLimit;
 
     // these must be hardcoded
     Eigen::VectorXd globalJointHighLimits(numConfigParams * numSheaths); // maximum allowable lengths/angles of the joints
-    globalJointHighLimits << q(2) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit, q(5) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit, 0.001, 0.0, 1.0;
+    globalJointHighLimits << q(2) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit, q(5) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit, q(8) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit;
     
     // perform differential kinematics calculation to obtain Jacobian
     Eigen::MatrixXd J_normal = generateJacobian(q);
@@ -1568,6 +1568,7 @@ Eigen::VectorXd inverseKinematics(Eigen::VectorXd &q, Eigen::VectorXd &qDot,
 
     int loop_counter = 0;
     Eigen::VectorXd joints_exceeded(numSheaths * numConfigParams);
+    // joints_exceeded.setZero();
 
     if (applyJointLimits) {
         bool finishedChecking = false;
@@ -2890,7 +2891,7 @@ int main()
 
     //std::cout << generateJacobian(q_sim) << std::endl;
 
-    for (int j = 0; j < 10000; ++j) {
+    for (int j = 0; j < 25001; ++j) {
         auto time = j * deltaT;
         Eigen::Matrix3d dummyRotMM_i_wrtG = Eigen::Matrix3d::Identity();
         
