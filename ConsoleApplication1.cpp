@@ -4,6 +4,7 @@
 #include <iostream>
 #include <Eigen/Dense>
 #include <Eigen/Core>
+
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cfenv>
+#include <chrono>
 
 
 class ExponentialMovingAverage
@@ -79,12 +81,32 @@ public:
     }
 };
 
+class Timer {
+private:
+    std::chrono::high_resolution_clock::time_point start_time;
+
+public:
+    void tic() {
+        start_time = std::chrono::high_resolution_clock::now();
+    }
+
+    double toc() {
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        return duration.count() / 1e6; // Convert to seconds
+    }
+};
+
 int numTubes = 3;
 int numConfigParams = 3;
 int numTotalTubes = 3;
 int numTendonsPerTube = 2;
 int nOfTendonMotors = 6;
 int nOfDrivenMotors = 9;
+
+const double PI = 3.14159265358979323846;
+const double EPSILON = 1e-6;
+const int MAX_ITERATIONS = 100;
 
 Eigen::Vector3d automated_velocity = Eigen::Vector3d::Zero();
 Eigen::Matrix<double, 2, 2, Eigen::RowMajor> tendonGeometry[3]; // creates a 3x2x2 matrix ie 3 2x2 matrices
@@ -1756,6 +1778,74 @@ std::pair<Eigen::Vector3d, Eigen::Vector3d> calculate_circleTrajectory_position_
     return std::make_pair(position, velocity);
 }
 
+double solve_equation(double f, double a, double b, double c) {
+    // Initial guess (you may need to adjust this based on your specific problem)
+    double th = -10.0;
+
+    for (int i = 0; i < MAX_ITERATIONS; ++i) {
+        double func = a + b * std::atan(th) + c * th - f;
+        double derivative = b / (1 + th * th) + c;
+
+        double delta = func / derivative;
+        th -= delta;
+
+        if (std::abs(delta) < EPSILON) {
+            return th;
+        }
+    }
+
+    // If we reach here, the method didn't converge
+    std::cerr << "Solution did not converge" << std::endl;
+    return NAN;
+}
+
+double f1(double th, double phi, double a1, double b1, double c1) {
+    return (a1 + b1 * std::atan(th) + c1) * std::cos(phi);
+}
+
+double f2(double th, double phi, double a2, double b2, double c2) {
+    return (a2 + b2 * std::atan(th) + c2) * std::sin(phi);
+}
+
+std::vector<double> solveEquations(double f1_target, double f2_target,
+    double a1, double b1, double c1,
+    double a2, double b2, double c2) {
+    double th = 26.0, phi = deg2rad(56.0); // Initial guesses
+    double epsilon = 1e-6; // Tolerance for convergence
+    int maxIterations = 1000;
+
+    for (int i = 0; i < maxIterations; ++i) {
+        // Calculate function values
+        double F1 = f1(th, phi, a1, b1, c1) - f1_target;
+        double F2 = f2(th, phi, a2, b2, c2) - f2_target;
+
+        // Calculate Jacobian elements
+        double J11 = b1 * std::cos(phi) / (1 + th * th);
+        double J12 = -(a1 + b1 * std::atan(th) + c1) * std::sin(phi);
+        double J21 = b2 * std::sin(phi) / (1 + th * th);
+        double J22 = (a2 + b2 * std::atan(th) + c2) * std::cos(phi);
+
+        // Calculate determinant of Jacobian
+        double det = J11 * J22 - J12 * J21;
+
+        // Calculate updates
+        double delta_th = (-F1 * J22 + F2 * J12) / det;
+        double delta_phi = (-F2 * J11 + F1 * J21) / det;
+
+        // Update th and phi
+        th += delta_th;
+        phi += delta_phi;
+
+        // Check for convergence
+        if (std::abs(delta_th) < epsilon && std::abs(delta_phi) < epsilon) {
+            return { th, phi };
+        }
+    }
+
+    // If no convergence, return empty vector
+    return {};
+}
+
 int main()
 {
     /* std::cout << "Hello World!\n";
@@ -2902,7 +2992,7 @@ int main()
         std::cout << "hello" << std::endl;
     } */
 
-    fesetround(FE_TONEAREST); // Round to nearest (even) like MATLAB
+    /* //fesetround(FE_TONEAREST); // Round to nearest (even) like MATLAB
 
     theta_init_ << deg2rad(25), deg2rad(25), 0.00005; // initial bending angles of each sheath
     phi_init_ << 180.0 * M_PI / 180.0, -90.0 * M_PI / 180.0, 0.0 * M_PI / 180.0; // initial bending plane offsets of each sheath
@@ -2983,7 +3073,7 @@ int main()
 
 
         forwardKinematics(q_sim, pTip_sim, dummyRotMM_i_wrtG);
-        writeVectorToCSV("C:/Users/ch256744/Downloads/endtip_precise.csv", pTip_sim);
+        writeVectorToCSV("C:/Users/ch256744/Downloads/endtip_precise6.csv", pTip_sim);
         unemployed += outOfWorkspace;
     }
 
@@ -2998,6 +3088,8 @@ int main()
     std::cout << "unemployed: " << unemployed << std::endl;
     std::cout << "qDot: " << qDot_sim << std::endl;
 
+    std::cout << "test: " << (2 > 1) << std::endl;
+
     //std::vector<double> locked_joints;
     //locked_joints.push_back(1);
     //locked_joints.push_back(6);
@@ -3005,7 +3097,51 @@ int main()
     //locked_joints.push_back(8);
     //
 
-    //std::cout << find_element(locked_joints, 1) << std::endl;
+    //std::cout << find_element(locked_joints, 1) << std::endl; */
+
+    /* //double f = 94;  // Known value of f
+    //double a = 1.0;  // Known value of a
+    //double b = 2.0;  // Known value of b
+    //double c = 3.0;  // Known value of c
+
+    Timer timer;
+
+    //double th = solve_equation(f, a, b, c);
+
+    //if (!std::isnan(th)) {
+    //    std::cout << "Solution: th = " << th << " radians" << std::endl;
+    //    std::cout << "th = " << th * 180 / PI << " degrees" << std::endl;
+
+    //    // Verify the solution
+    //    double result = a + b * std::atan(th) + c * th;
+    //    std::cout << "Verification: f = " << result << std::endl;
+    //}
+
+    double f1_target = 47.04, f2_target = 109.65;
+    double a1 = 1.0, b1 = 2.0, c1 = 3.0;
+    double a2 = 2.0, b2 = 3.0, c2 = 4.0;
+
+    timer.tic();
+    std::vector<double> solution = solveEquations(f1_target, f2_target, a1, b1, c1, a2, b2, c2);
+    double elapsed_time = timer.toc();
+
+    std::cout << "Elapsed time: " << elapsed_time << " seconds" << std::endl;
+
+    if (!solution.empty()) {
+        std::cout << "Solution found:" << std::endl;
+        std::cout << "th = " << solution[0] << std::endl;
+        std::cout << "phi = " << solution[1] << std::endl;
+    }
+    else {
+        std::cout << "No solution found within the specified iterations." << std::endl;
+    } */
+
+    Eigen::Matrix3d g;
+    g << 2, 0, 2, 0, 1, 0, 0, 0, 3;
+    Eigen::Vector3d a;
+    a << 2, 4, 5;
+    std::cout << g(2) << std::endl;
+    std::cout << g * a << std::endl;
 };
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
