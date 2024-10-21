@@ -28,6 +28,36 @@
 #include <stdexcept>
 #include <cfenv>
 #include <chrono>
+#include <array>
+
+typedef Eigen::Matrix< long double, Eigen::Dynamic, 1              > Vec;
+typedef Eigen::Matrix< long double, Eigen::Dynamic, Eigen::Dynamic > Mat;
+
+class MedianFilter {
+    private:
+        std::vector<double> window;
+        size_t windowSize;
+        size_t middleIndex;
+
+    public:
+        MedianFilter(size_t size) : windowSize(size), middleIndex(size / 2) {
+            window.reserve(windowSize);
+        }
+
+        double calculate(double newSample) {
+            if (window.size() < windowSize) {
+                window.push_back(newSample);
+            }
+            else {
+                window[windowSize - 1] = newSample;
+            }
+
+            std::vector<double> sortedWindow = window;
+            std::nth_element(sortedWindow.begin(), sortedWindow.begin() + middleIndex, sortedWindow.end());
+
+            return sortedWindow[middleIndex];
+        }
+};
 
 
 class ExponentialMovingAverage
@@ -99,6 +129,7 @@ public:
 
 int numTubes = 3;
 int numConfigParams = 3;
+int numConfigParams_ = 3;
 int numTotalTubes = 3;
 int numTendonsPerTube = 2;
 int nOfTendonMotors = 6;
@@ -123,7 +154,7 @@ Eigen::VectorXd maxJointSpeed = Eigen::VectorXd::Zero(numTubes * numConfigParams
 Eigen::VectorXd jointMidPoints = Eigen::VectorXd::Zero(numTubes * numConfigParams);
 int outOfWorkspace = 0;
 double previous_time_ = 0.0;
-double deltaT = 0.01;
+double deltaT = 0.1;
 double redundancyResolutionOn = 1.0;
 bool useOnlyPositionJacobian = true;
 bool applyJointLimits = true;
@@ -132,7 +163,7 @@ bool applyJointLimits = true;
     1: position and orientation with no roll (5 DOF) with 6 DOF robot (no phi1, theta3, and phi3)
     2: position and orientation (6 DOF) with 7 DOF robot (no phi1 and theta3).
 */
-int operatingMode = 0;
+int operatingMode = 1;
 
 bool exp_start_time_saved_ = false;
 double exp_start_time_ = 0.0;
@@ -144,6 +175,10 @@ Eigen::VectorXd qDot_sim = Eigen::VectorXd::Zero(numTubes * numConfigParams);
 Eigen::Vector3d pTip_init_sim;
 Eigen::Vector3d pTip_sim;
 Eigen::VectorXd displacement_sim = Eigen::VectorXd::Zero(nOfDrivenMotors);
+
+template <typename T> double sgn(T val) {
+    return (T(0) < val) - (val < T(0));
+}
 
 Eigen::Matrix3d skew(const Eigen::Vector3d& w)
 {
@@ -165,35 +200,35 @@ Eigen::Matrix3d skew(const Eigen::Vector3d& w)
     return R;
 }
 
-Eigen::MatrixXd pinv(const Eigen::MatrixXd& A, double tol)
+Eigen::MatrixXd pinv(Eigen::MatrixXd A, double tol)
 {
-    Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeThinU | Eigen::ComputeThinV);
-    Eigen::VectorXd s = svd.singularValues();
+    //Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeThinU | Eigen::ComputeThinV);
+    //Eigen::VectorXd s = svd.singularValues();
 
-    //std::cout << "single ladies" << s << std::endl;
+    ////std::cout << "single ladies" << s << std::endl;
 
-    /*if (!s.isZero(0))
-    {
-        // int r1 = (s.array() > tol).count() + 1; // since the last s is too small and this +1 allows it to exist, its inverse down the line creates big values. This is to ensure that r1 is at least 1 but it is now done as follows (but matlab's pinv if you look at it carefully does not do it. although there is +1):
-        int r1 = (s.array() > tol).count(); // estimate effective rank
-        r1 = std::max(r1, 1);               // Ensure that r1 is at least 1 // matlab does not ensure this
+    //if (!s.isZero(0))
+    //{
+    //    // int r1 = (s.array() > tol).count() + 1; // since the last s is too small and this +1 allows it to exist, its inverse down the line creates big values. This is to ensure that r1 is at least 1 but it is now done as follows (but matlab's pinv if you look at it carefully does not do it. although there is +1):
+    //    int r1 = (s.array() > tol).count(); // estimate effective rank
+    //    r1 = std::max(r1, 1);               // Ensure that r1 is at least 1 // matlab does not ensure this
 
-        Eigen::MatrixXd U = svd.matrixU();
-        Eigen::MatrixXd V = svd.matrixV();
+    //    Eigen::MatrixXd U = svd.matrixU();
+    //    Eigen::MatrixXd V = svd.matrixV();
 
-        // V.rightCols(V.cols() - r1).setZero();
-        V.conservativeResize(V.rows(), r1);
-        // U.rightCols(U.cols() - r1).setZero();
-        U.conservativeResize(U.rows(), r1);
-        s.conservativeResize(r1);
+    //    // V.rightCols(V.cols() - r1).setZero();
+    //    V.conservativeResize(V.rows(), r1);
+    //    // U.rightCols(U.cols() - r1).setZero();
+    //    U.conservativeResize(U.rows(), r1);
+    //    s.conservativeResize(r1);
 
-        s = s.array().inverse();
-        return V * s.asDiagonal() * U.transpose();
-    }
-    else
-    {
-        return Eigen::MatrixXd::Constant(A.cols(), A.rows(), std::numeric_limits<double>::quiet_NaN());
-    }*/
+    //    s = s.array().inverse();
+    //    return V * s.asDiagonal() * U.transpose();
+    //}
+    //else
+    //{
+    //    return Eigen::MatrixXd::Constant(A.cols(), A.rows(), std::numeric_limits<double>::quiet_NaN());
+    //}
 
     auto toReturn = A.completeOrthogonalDecomposition();
     toReturn.setThreshold(tol); // sets the threshold for which values should be considered to be 0
@@ -1507,22 +1542,118 @@ Eigen::VectorXd calculateJointVelocities(Eigen::MatrixXd J,
     Eigen::VectorXd nullSpace = (Eigen::MatrixXd::Identity((numSheaths * numConfigParams), (numSheaths * numConfigParams)) - pinvJ * J) *
         redundancyResolutionOn *
         nullspaceObjectiveVector;
+    //Vec nullSpace = (Eigen::MatrixXd::Identity((numSheaths * numConfigParams), (numSheaths * numConfigParams)) - pinvJ * J) *
+    //    redundancyResolutionOn *
+    //    nullspaceObjectiveVector;
     // calculate joint velocities
     Eigen::VectorXd qDot = imageSpace + nullSpace;
 
-    bool nullSpaceOverspeed = false;
-    Eigen::VectorXd nullspaceScaling = Eigen::VectorXd::Zero((numSheaths * numConfigParams)); // scaling factor for downscaling the nullspace
+    bool skip = false;
+    if ((nullSpace * nullSpace.transpose()).sum() == 0) {
+        skip = true;
+    }
 
-    for (int i = 0; i < (numSheaths * numConfigParams); ++i) { // check every joint to see if it exceeds the designated max speed
-        if (std::abs(qDot(i)) > maxJointSpeed(i) + 0.0000000000000001) { // calculate nullspace scaling factor
-            double nullSpaceElementIdealValue = (qDot(i) / std::abs(qDot(i))) * maxJointSpeed(i) - imageSpace(i);
-            nullspaceScaling(i) = nullSpace(i) / nullSpaceElementIdealValue;
-            nullSpaceOverspeed = true;
+    bool nullSpaceOverspeed = false;
+    Eigen::VectorXd nullspaceScaling = Eigen::VectorXd::Zero((numSheaths * numConfigParams_)); // scaling factor for downscaling the nullspace
+
+    if (!skip) {
+        for (int i = 0; i < (numSheaths * numConfigParams_); ++i) { // check every joint to see if it exceeds the designated max speed
+            if (std::abs(qDot(i)) > maxJointSpeed(i) + 0.0000000000000001) { // calculate nullspace scaling factor
+                double nullSpaceElementIdealValue = sgn(qDot(i)) * maxJointSpeed(i) - imageSpace(i);
+                nullspaceScaling(i) = nullSpace(i) / nullSpaceElementIdealValue;
+                nullSpaceOverspeed = true;
+            }
+        }
+
+        if (nullSpaceOverspeed) { // check that maximum scaling factor is greater than 0
+            qDot = imageSpace + nullSpace / nullspaceScaling.maxCoeff(); // downscale nullspace
+        }
+    }
+    else {
+        qDot = imageSpace;
+    }
+
+    // Check again if new qDot is beyond the speed limit
+    bool qDotOverspeed = false;
+    Eigen::VectorXd qDotScaling = Eigen::VectorXd::Zero((numSheaths * numConfigParams));
+    for (int i = 0; i < (numSheaths * numConfigParams); ++i) {
+        if (std::abs(qDot(i)) > maxJointSpeed(i) + 0.0000000000000001) {
+            qDotOverspeed = true;
         }
     }
 
-    if (nullSpaceOverspeed) { // check that maximum scaling factor is greater than 0
-        qDot = imageSpace + nullSpace / nullspaceScaling.maxCoeff(); // downscale nullspace
+    if (qDotOverspeed) {
+        qDot = imageSpace + nullSpace; // calculate joint velocities using original image space and nullspace
+        for (int i = 0; i < (numSheaths * numConfigParams); ++i) {
+            if (std::abs(qDot(i)) > maxJointSpeed(i) + 0.0000000000000001) {
+                qDotScaling(i) = std::abs(qDot(i)) / maxJointSpeed(i);
+            }
+        }
+        qDot = qDot / qDotScaling.maxCoeff(); // apply recalculated scaling factors
+    }
+
+    for (int i = 0; i < (numSheaths * numConfigParams); ++i) {
+        if (std::abs(qDot(i)) > maxJointSpeed(i) + 0.0000000001) { // somehow still overspeeding
+            std::cout << "overspeeding" << std::endl;
+        }
+    }
+
+    return qDot;
+}
+
+Eigen::VectorXd calculateJointVelocities(Eigen::MatrixXd J,
+    Eigen::VectorXd tipVelocityDesired, Eigen::VectorXd nullspaceObjectiveVector, std::vector<double> lockedjoints, int exceededJointTracker) {
+    double toler = 0.002; // used in rank estimation for pinv
+
+    int numSheaths = J.cols() / numConfigParams;
+    // calculate pseudoinverse of Jacobian
+    Eigen::MatrixXd pinvJ = pinv(J, toler);
+    // calculate image space
+    Eigen::VectorXd imageSpace = pinvJ * tipVelocityDesired;
+    // calculate nullspace
+    Eigen::VectorXd nullSpace = (Eigen::MatrixXd::Identity((numSheaths * numConfigParams), (numSheaths * numConfigParams)) - pinvJ * J) *
+        redundancyResolutionOn *
+        nullspaceObjectiveVector;
+    //Vec nullSpace = (Eigen::MatrixXd::Identity((numSheaths * numConfigParams), (numSheaths * numConfigParams)) - pinvJ * J) *
+    //    redundancyResolutionOn *
+    //    nullspaceObjectiveVector;
+    // calculate joint velocities
+    Eigen::VectorXd qDot = imageSpace + nullSpace;
+
+    bool skip = false;
+    if ((nullSpace * nullSpace.transpose()).sum() == 0) {
+        //for (int j = 0; j < nullSpace.size(); ++j) {
+        //    nullSpace(j) = EPSILON;
+        //}
+
+        //for (int k : lockedjoints) {
+        //    nullSpace(k) = 0.0;
+        //}
+
+        //if (exceededJointTracker != -1) {
+        //    nullSpace(exceededJointTracker) = 0.0;
+        //}
+        skip = true;
+    }
+
+    bool nullSpaceOverspeed = false;
+    Eigen::VectorXd nullspaceScaling = Eigen::VectorXd::Zero((numSheaths * numConfigParams_)); // scaling factor for downscaling the nullspace
+
+    if (!skip) {
+        for (int i = 0; i < (numSheaths * numConfigParams_); ++i) { // check every joint to see if it exceeds the designated max speed
+            if (std::abs(qDot(i)) > maxJointSpeed(i) + 0.0000000000000001) { // calculate nullspace scaling factor
+                double nullSpaceElementIdealValue = sgn(qDot(i)) * maxJointSpeed(i) - imageSpace(i);
+                nullspaceScaling(i) = nullSpace(i) / nullSpaceElementIdealValue;
+                nullSpaceOverspeed = true;
+            }
+        }
+
+        if (nullSpaceOverspeed) { // check that maximum scaling factor is greater than 0
+            qDot = imageSpace + nullSpace / nullspaceScaling.maxCoeff(); // downscale nullspace
+        }
+    }
+    else {
+        qDot = imageSpace;
     }
 
     // Check again if new qDot is beyond the speed limit
@@ -1579,28 +1710,40 @@ Eigen::VectorXd inverseKinematics(Eigen::VectorXd &q, Eigen::VectorXd &qDot,
 
     switch (mode) {
     case 0: // only position (3 DOF) with 5 DOF (no phi1 and sheath3)
-        locked_joints.push_back(1);
-        locked_joints.push_back(6);
-        locked_joints.push_back(7);
-        locked_joints.push_back(8);
-        // only grabs the top half of the Jacobian ie linear components
-        J_use = J_normal.block(0, 0, 3, numConfigParams * numSheaths);
-        // only grabs the top half of desired input ie x, y, z
-        tipVelocityDesired_use = tipVelocityDesired.head(3);
-
-        break;
+        {
+            locked_joints.push_back(1);
+            locked_joints.push_back(6);
+            locked_joints.push_back(7);
+            locked_joints.push_back(8);
+            // only grabs the top half of the Jacobian ie linear components
+            J_use = J_normal.block(0, 0, 3, numConfigParams_ * numSheaths);
+            // only grabs the top half of desired input ie x, y, z
+            tipVelocityDesired_use = tipVelocityDesired.head(3);
+            break;
+        }
     case 1: // position and orientation with no roll (5 DOF) with 6 DOF robot (no phi1, theta3, and phi3)
-        locked_joints.push_back(1);
-        locked_joints.push_back(6);
-        locked_joints.push_back(7);
-        J_use = J_normal.block(0, 0, 5, numConfigParams * numSheaths);
-        tipVelocityDesired_use = tipVelocityDesired.head(5);
-        break;
+        {
+            locked_joints.push_back(1);
+            locked_joints.push_back(6);
+            locked_joints.push_back(7);
+            // J_use = J_normal.block(0, 0, 5, numConfigParams_ * numSheaths);
+            // tipVelocityDesired_use = tipVelocityDesired.head(5);
+            Eigen::MatrixXd temp1(4, numConfigParams_ * numSheaths);
+            temp1 << J_normal.row(0), J_normal.row(1), J_normal.row(2), J_normal.row(4);
+            J_use = temp1;
+
+            Eigen::VectorXd temp2(4);
+            temp2 << tipVelocityDesired(0), tipVelocityDesired(1), tipVelocityDesired(2), tipVelocityDesired(4);
+            tipVelocityDesired_use = temp2;
+            break;
+        }
     default: // position and orientation (6 DOF) with 7 DOF robot (no phi1 and theta3)
-        locked_joints.push_back(1);
-        locked_joints.push_back(6);
-        J_use = J_normal;
-        tipVelocityDesired_use = tipVelocityDesired;
+        {
+            locked_joints.push_back(1);
+            locked_joints.push_back(6);
+            J_use = J_normal;
+            tipVelocityDesired_use = tipVelocityDesired;
+        }
     }
 
     // calculate secondary task for null space manipulation (redundancy resolution)
@@ -1637,7 +1780,9 @@ Eigen::VectorXd inverseKinematics(Eigen::VectorXd &q, Eigen::VectorXd &qDot,
     // calculate joint velocities
     qDot = calculateJointVelocities(J_use,
         tipVelocityDesired_use,
-        nullspaceObjectiveVector);
+        nullspaceObjectiveVector,
+        locked_joints,
+        -1);
 
     Eigen::VectorXd qNew = q + qDot * deltaT; // recalculate config params
 
@@ -1692,13 +1837,11 @@ Eigen::VectorXd inverseKinematics(Eigen::VectorXd &q, Eigen::VectorXd &qDot,
                 // calculate joint velocities
                 qDot = calculateJointVelocities(J_use,
                     tipVelocityDesired_use,
-                    nullspaceObjectiveVector);
+                    nullspaceObjectiveVector,
+                    locked_joints,
+                    exceededJoint);
 
                 qNew = q + qDot * deltaT; // recalculate config params
-
-                // std::string minOrMax = (qNewPre(exceededJoint) < limitLowJoint(exceededJoint)) ? "MIN" : "MAX";
-                // RCLCPP_INFO(this->get_logger(), "THETA %s LIMIT REACHED FOR SEGMENT %i", minOrMax.c_str(), exceededJoint / 3);
-                // RCLCPP_INFO(this->get_logger(), "THETA VALUE %i IS: %f", exceededJoint, qNewPre(exceededJoint));
             }
             else {
                 finishedChecking = true;
@@ -1844,6 +1987,83 @@ std::vector<double> solveEquations(double f1_target, double f2_target,
 
     // If no convergence, return empty vector
     return {};
+}
+
+Eigen::Vector3d rotationMatrixToEulerAngles(Eigen::Matrix3d R, double epsilon = 1e-6) {
+    // Check if the rotation matrix is valid
+
+    double x, y, z;
+
+    // Check for gimbal lock
+    if (std::abs(R(0,2)) > 1.0 - epsilon) {
+        // Gimbal lock case
+        z = 0.0;
+        if (R(0,2) < 0) {
+            y = PI / 2.0;
+            x = std::atan2(R(1,0), R(2,0));
+        }
+        else {
+            y = -PI / 2.0;
+            x = std::atan2(-R(1,0), -R(2,0));
+        }
+    }
+    else {
+        // General case
+        y = std::asin(-R(0,2));
+        double cos_y = std::cos(y);
+
+        x = std::atan2(R(1,2) / cos_y, R(2,2) / cos_y);
+        z = std::atan2(R(0,1) / cos_y, R(0,0) / cos_y);
+    }
+
+    // Normalize angles to be between -PI and PI
+    x = std::fmod(x + M_PI, 2 * M_PI) - M_PI;
+    y = std::fmod(y + M_PI, 2 * M_PI) - M_PI;
+    z = std::fmod(z + M_PI, 2 * M_PI) - M_PI;
+
+    return { y, x, z }; // Return in YXZ order
+}
+
+
+Eigen::Vector3d customRotToAng(Eigen::Matrix3d rot, double ry_p, double rx_p, double rz_p) {
+    int i = 1;
+    int j = 0;
+    int k = 2;
+
+    Eigen::Vector3d toReturn = Eigen::Vector3d::Zero();
+
+    toReturn(0) = std::atan2(rot(j, k), rot(k, k));
+    auto c2 = Eigen::Vector2d(rot(i, i), rot(i, j)).norm();
+
+    if (toReturn(0) < 0.0) {
+        //toReturn(0) += M_PI;
+        toReturn(1) = std::atan2(-1.0 * rot(i, k), -1.0 * c2);
+    } else {
+        toReturn(1) = std::atan2(-1.0 * rot(i, k), c2);
+    }
+
+    auto s1 = std::sin(toReturn(0));
+    auto c1 = std::cos(toReturn(0));
+    toReturn(2) = std::atan2(s1 * rot(k, i) - c1 * rot(j, i), c1 * rot(j, j) - s1 * rot(k, j));
+
+    return toReturn;
+}
+
+Eigen::Vector3d rotationToEuler_yxz(Eigen::Matrix3d toConvert, double prev_rx, double prev_ry, double prev_rz) {
+    Eigen::Vector3d toReturn;
+    double x = std::asin(-1.0 * toConvert(1, 2));
+    double y = std::atan2(toConvert(0, 2) / std::cos(x), toConvert(2, 2) / std::cos(x));
+    double z = std::atan2(toConvert(1, 0) / std::cos(x), toConvert(1, 1) / std::cos(x));
+
+    if (std::abs(y - prev_ry) > 0.2) {
+        x = (x > 0) ? (M_PI - x) : (-1.0 * x - M_PI);
+
+        y = std::atan2(toConvert(0, 2) / std::cos(x), toConvert(2, 2) / std::cos(x));
+        z = std::atan2(toConvert(1, 0) / std::cos(x), toConvert(1, 1) / std::cos(x));
+    }
+
+    toReturn << y, x, z;
+    return toReturn;
 }
 
 int main()
@@ -2992,11 +3212,11 @@ int main()
         std::cout << "hello" << std::endl;
     } */
 
-    /* //fesetround(FE_TONEAREST); // Round to nearest (even) like MATLAB
+    fesetround(FE_TONEAREST); // Round to nearest (even) like MATLAB
 
     theta_init_ << deg2rad(25), deg2rad(25), 0.00005; // initial bending angles of each sheath
     phi_init_ << 180.0 * M_PI / 180.0, -90.0 * M_PI / 180.0, 0.0 * M_PI / 180.0; // initial bending plane offsets of each sheath
-    length_init_ << 30.0, 30.0, 30.0; // initial length of the steerable section of each sheath in mm
+    length_init_ << 10.0, 10.0, 10.0; // initial length of the steerable section of each sheath in mm
     delta_ << 2.3, 1.8, 1.0; // radius (in meters) of cross sectional circle centered at sheath centerline and passes through the tendon locations
 
     Eigen::VectorXd q(numConfigParams * numTubes);
@@ -3026,6 +3246,11 @@ int main()
         q_sim.segment((i * numConfigParams), numConfigParams) << theta_init_(i), phi_init_(i), length_init_(i);
     }
 
+    std::vector<MedianFilter> medfilt;
+    for (int i = 0; i < 6; ++i) {
+        medfilt.push_back(MedianFilter(100));
+    }
+
     std::cout << q_sim << std::endl;
     Eigen::Matrix3d dummyRotMM_i_wrtG1 = Eigen::Matrix3d::Identity();
 
@@ -3041,18 +3266,18 @@ int main()
     std::vector<Eigen::VectorXd> printqsims;
     std::vector<Eigen::VectorXd> printqdotsims;
 
-    for (int j = 0; j < 25000; ++j) {
+    for (int j = 0; j < 10000; ++j) {
         auto time = j * deltaT;
         Eigen::Matrix3d dummyRotMM_i_wrtG = Eigen::Matrix3d::Identity();
         
         forwardKinematics(q_sim, pTip_sim, dummyRotMM_i_wrtG);
 
         std::pair<Eigen::Vector3d, Eigen::Vector3d> result =
-            calculate_circleTrajectory_position_velocity_f(pTip_init_sim, time, 0.5, outOfWorkspace, pTip_sim);
+            calculate_circleTrajectory_position_velocity_f(pTip_init_sim, time, 0.25, outOfWorkspace, pTip_sim);
         automated_velocity = result.second;
 
         Eigen::VectorXd tipVelocityDesired(6); // command from manual control
-        tipVelocityDesired << automated_velocity(0), automated_velocity(1), automated_velocity(2), 0.0, 0.0, 0.0;
+        tipVelocityDesired << automated_velocity(0), automated_velocity(1), automated_velocity(2), 0.0, 0.35 * (2.0 * M_PI / 500.0) * std::cos(j * ((2.0 * M_PI) / 500.0)), 0.0;
 
         Eigen::VectorXd displacementCalc(nOfDrivenMotors);
         displacementCalc = Eigen::VectorXd::Zero(nOfDrivenMotors); // motor displacement
@@ -3070,10 +3295,11 @@ int main()
         
 
         q_sim = inverseKinematics(q_sim, qDot_sim, displacement_sim, tipVelocityDesired, operatingMode, outOfWorkspace);
+        Eigen::MatrixXd jacobian = generateJacobian(q_sim);
 
 
         forwardKinematics(q_sim, pTip_sim, dummyRotMM_i_wrtG);
-        writeVectorToCSV("C:/Users/ch256744/Downloads/endtip_precise6.csv", pTip_sim);
+        writeVectorToCSV("C:/Users/ch256744/BCH Dropbox/Phillip Tran/ExtendedICRAPaper/AbdulsCode/MatlabCode/endtip_precise1021_20circle_2.csv", pTip_sim);
         unemployed += outOfWorkspace;
     }
 
@@ -3089,6 +3315,31 @@ int main()
     std::cout << "qDot: " << qDot_sim << std::endl;
 
     std::cout << "test: " << (2 > 1) << std::endl;
+
+    //Eigen::MatrixXd j(3, 9);
+    //j << -43.376, 0, 0, 22.851, -25.555, 0, 0, 0, 0,
+    //    -6.3036e-13, 0, 0, 14.115, 1.35, 0, 0, 0, 0,
+    //    -39.336, 0, 0, -18.3, -30.869, 0, 0, 0, 0;
+    //std::cout << "j " << j << std::endl;
+    //std::cout << "jinv" << pinv(j, 0.002) << std::endl;
+
+    Eigen::MatrixXd pinv(9,3);
+    pinv << 0.483791, -2.47528, -0.561424, 0, 0, 0, 0, 0, 0, 0.186841, -0.821548, -0.205854, -0.597136, 2.98518, 0.657902, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0;
+    Eigen::MatrixXd j(3, 9);
+    j << -38.7923, 0, 0, 24.8744, -25.3205, 0, 0, 0, 0, 4.75069e-15, 0, 0, 8.88868, 2.78123, 0, 0, 0, 0, -35.2094, 0, 0, -17.7548, -34.0815, 0, 0, 0, 0;
+    std::cout << "h: " << pinv * j << std::endl;
+    Eigen::VectorXd ns(9);
+    ns << -0.000956319, 0, 0, -0.00273355, 0, 0, 0, 0, 0;
+    Eigen::MatrixXd p = Eigen::MatrixXd::Identity(9,9);
+    std::cout << "p: " << p - (pinv*j) << std::endl;
+    std::cout << "g: " << (p - (pinv * j)) * ns << std::endl;
+
+    std::cout << "vec size: " << ns.size() << std::endl;
+
+    Mat m(1, 1);
+    long double u = 5;
+    m(0, 0) = u;
+    std::cout << m << std::endl;
 
     //std::vector<double> locked_joints;
     //locked_joints.push_back(1);
@@ -3136,12 +3387,40 @@ int main()
         std::cout << "No solution found within the specified iterations." << std::endl;
     } */
 
-    Eigen::Matrix3d g;
-    g << 2, 0, 2, 0, 1, 0, 0, 0, 3;
-    Eigen::Vector3d a;
-    a << 2, 4, 5;
-    std::cout << g(2) << std::endl;
-    std::cout << g * a << std::endl;
+    /* 
+    //for (int i = 0; i < 1; ++i) {
+    //    for (int j = 0; j < 1; ++j) {
+    //        Eigen::Matrix3d rot = getRoty(double(j)) * getRotx(double(i)) * getRotz(0.0);
+    //        auto c = rotationMatrixToEulerAngles(rot);
+    //        std::cout << rad2deg(c(0)) << rad2deg(c(1)) << rad2deg(c(2)) << std::endl;
+    //    }
+    //}
+
+    Eigen::Matrix3d f;
+    f << 0.8763,    0.3031,    0.3745,
+        0.3563,    0.1158, - 0.9272,
+        - 0.3244,    0.9459, - 0.0065;
+
+    //std::cout << f << std::endl;
+    //auto b = rotationToEuler_yxz(f,0,deg2rad(90.8),0);
+    //std::cout << rad2deg(b(0)) << " " << rad2deg(b(1)) << " " << rad2deg(b(2)) << std::endl;
+
+    Eigen::MatrixXd y(6,6);
+    y << 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36;
+    auto J_use = y.block(0, 0, 3, 6);
+    auto other = y.block(4, 0, 1, 6);
+
+    std::cout << y << std::endl;
+    std::cout << other << std::endl;
+
+    Eigen::MatrixXd b(J_use.rows() + other.rows(), J_use.cols());
+    b.topRows(J_use.rows()) = J_use;
+    b.bottomRows(other.rows()) = other;
+
+    std::cout << b << std::endl;
+
+    std::cout << sgn(0) << std::endl;
+    std::cout << sgn(-3) << std::endl; */
 };
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
