@@ -24,6 +24,35 @@
 #include <typeinfo>
 #include <ctime>
 #include <algorithm>
+#include <random>
+
+
+
+class MedianFilter {
+private:
+    std::vector<double> window;
+    size_t windowSize;
+    size_t middleIndex;
+
+public:
+    MedianFilter(size_t size) : windowSize(size), middleIndex(size / 2) {
+        window.reserve(windowSize);
+    }
+
+    double calculate(double newSample) {
+        if (window.size() < windowSize) {
+            window.push_back(newSample);
+        }
+        else {
+            window[windowSize - 1] = newSample;
+        }
+
+        std::vector<double> sortedWindow = window;
+        std::nth_element(sortedWindow.begin(), sortedWindow.begin() + middleIndex, sortedWindow.end());
+
+        return sortedWindow[middleIndex];
+    }
+};
 
 class ExponentialMovingAverage
 {
@@ -118,6 +147,39 @@ Eigen::VectorXd qDot_sim = Eigen::VectorXd::Zero(numTubes * numConfigParams);
 Eigen::Vector3d pTip_init_sim;
 Eigen::Vector3d pTip_sim;
 Eigen::VectorXd displacement_sim = Eigen::VectorXd::Zero(nOfDrivenMotors);
+
+
+Eigen::VectorXd createArray() {
+    const int size = 500;
+    Eigen::VectorXd arr(size);
+
+    // Create a sequence from 1 to 500
+    Eigen::VectorXd sequence = Eigen::VectorXd::LinSpaced(size, 1, size);
+
+    // Calculate the sine part
+    arr = 10 * (2 * M_PI * sequence / size).array().sin();
+
+    // Generate random values and apply conditions
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<> dis(0, 1);
+
+    for (int i = 0; i < size; ++i) {
+        double random_value1 = dis(gen);
+        double random_value2 = dis(gen);
+
+        if (random_value1 > 0.95) {
+            arr(i) += 20;
+        }
+        if (random_value2 < 0.05) {
+            arr(i) -= 20;
+        }
+    }
+
+    return arr;
+}
+
+
 
 Eigen::Matrix3d skew(const Eigen::Vector3d& w)
 {
@@ -1701,6 +1763,41 @@ std::pair<Eigen::Vector3d, Eigen::Vector3d> calculate_circleTrajectory_position_
     return std::make_pair(position, velocity);
 }
 
+double solve_equation1(double a1, double b1, double c1, double td1,
+    double a2, double b2, double c2, double td2, double init_guess, int iterations) {
+    double th = init_guess;  // Initial guess
+    double EPSILON = 1e-6;
+
+    for (int i = 0; i < iterations; ++i) {
+        // Calculate f(th)
+        double term1 = pow(td1 / (a1 + b1 * atan(th) + c1 * th), 2);
+        double term2 = pow(td2 / (a2 + b2 * atan(th) + c2 * th), 2);
+        double f_value = term1 + term2 - 1;
+
+        // Calculate f'(th)
+        double den1 = a1 + b1 * atan(th) + c1 * th;
+        double den2 = a2 + b2 * atan(th) + c2 * th;
+        double f_prime_value = -2 * pow(td1 / den1, 2) * (b1 / (1 + th * th) + c1) / den1
+            - 2 * pow(td2 / den2, 2) * (b2 / (1 + th * th) + c2) / den2;
+
+        if (std::abs(f_prime_value) < EPSILON) {
+            std::cout << "Derivative too small, method may not converge." << std::endl;
+            return th;
+        }
+
+        double next_th = th - f_value / f_prime_value;
+
+        if (std::abs(next_th - th) < EPSILON) {
+            return next_th;
+        }
+
+        th = next_th;
+    }
+
+    std::cout << "Method did not converge within " << iterations << " iterations." << std::endl;
+    return th;
+}
+
 int main()
 {
     /* std::cout << "Hello World!\n";
@@ -2847,7 +2944,7 @@ int main()
         std::cout << "hello" << std::endl;
     } */
 
-    theta_init_ << deg2rad(25), deg2rad(25), 0.00005; // initial bending angles of each sheath
+    /*theta_init_ << deg2rad(25), deg2rad(25), 0.00005; // initial bending angles of each sheath
     phi_init_ << 180.0 * M_PI / 180.0, -90.0 * M_PI / 180.0, 0.0 * M_PI / 180.0; // initial bending plane offsets of each sheath
     length_init_ << 30.0, 30.0, 30.0; // initial length of the steerable section of each sheath in mm
     delta_ << 2.3, 1.8, 1.0; // radius (in meters) of cross sectional circle centered at sheath centerline and passes through the tendon locations
@@ -2912,7 +3009,52 @@ int main()
         forwardKinematics(q_sim, pTip_sim, dummyRotMM_i_wrtG);
     }
     std::cout << "new ptip: " << pTip_sim << std::endl;
-    std::cout << "qsim: " << q_sim << std::endl;
+    std::cout << "qsim: " << q_sim << std::endl;*/
+
+    /*std::cout << solve_equation1(1.0, 2.0, 3.0, 47.0375,
+        2.0, 3.0, 4.0, 109.6496, 20.0, 100) << std::endl;
+    Eigen::MatrixXd matrix(5, 3);
+    matrix << 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15;
+
+    std::cout << "Original matrix:\n" << matrix << "\n\n";
+
+    // Select rows 0, 2, and 4
+    Eigen::MatrixXd result(3, matrix.cols());
+    result << matrix.row(0), matrix.row(2), matrix.row(4);
+
+    std::cout << "Result matrix:\n" << result << "\n";
+
+    */
+
+    /*int pi1 = 3.11445566778877667788;
+    float pi2 = 3.11445566778877667788;
+    double pi3 = 3.11445566778877667788;
+    long double pi4 = 3.11445566778877667788;
+    long double pi5 = 13.11445566778877667788;
+    std::cout << "PI value : " << std::setprecision(21) << pi1 << std::endl;
+    std::cout << "PI value : " << std::setprecision(21) << pi2 << std::endl;
+    std::cout << "PI value : " << std::setprecision(21) << pi3 << std::endl;
+    std::cout << "PI value : " << std::setprecision(21) << pi4 << std::endl;
+    std::cout << "PI value : " << std::setprecision(21) << pi5 << std::endl;
+    std::cout << "PI value : " << std::setprecision(21) << pi3/2 << std::endl;
+    std::cout << "PI value : " << std::setprecision(21) << pi3 / 2.0 << std::endl;
+    std::cout << M_PI << std::endl;
+    std::cout << std::setprecision(21) << M_PI << std::endl;
+    Eigen::MatrixXd matrix(3, 4);
+    matrix << 1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0, 2.0 ,3.0 ,4.0 ,5.0;
+    std::cout << std::setprecision(21) << pinv(matrix, 0.002) << std::endl;*/
+
+    auto arr = createArray();
+    MedianFilter mf = MedianFilter(10);
+
+    std::vector<double> temp;
+    for (int i = 0; i < arr.size(); ++i) {
+        temp.push_back(mf.calculate(arr(i)));
+    }
+
+    
+
+
 };
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
