@@ -202,37 +202,37 @@ Eigen::Matrix3d skew(const Eigen::Vector3d& w)
 
 Eigen::MatrixXd pinv(Eigen::MatrixXd A, double tol)
 {
-    //Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeThinU | Eigen::ComputeThinV);
-    //Eigen::VectorXd s = svd.singularValues();
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeThinU | Eigen::ComputeThinV);
+    Eigen::VectorXd s = svd.singularValues();
 
     ////std::cout << "single ladies" << s << std::endl;
 
-    //if (!s.isZero(0))
-    //{
-    //    // int r1 = (s.array() > tol).count() + 1; // since the last s is too small and this +1 allows it to exist, its inverse down the line creates big values. This is to ensure that r1 is at least 1 but it is now done as follows (but matlab's pinv if you look at it carefully does not do it. although there is +1):
-    //    int r1 = (s.array() > tol).count(); // estimate effective rank
-    //    r1 = std::max(r1, 1);               // Ensure that r1 is at least 1 // matlab does not ensure this
+    if (!s.isZero(0))
+    {
+        // int r1 = (s.array() > tol).count() + 1; // since the last s is too small and this +1 allows it to exist, its inverse down the line creates big values. This is to ensure that r1 is at least 1 but it is now done as follows (but matlab's pinv if you look at it carefully does not do it. although there is +1):
+        int r1 = (s.array() > tol).count(); // estimate effective rank
+        r1 = std::max(r1, 1);               // Ensure that r1 is at least 1 // matlab does not ensure this
 
-    //    Eigen::MatrixXd U = svd.matrixU();
-    //    Eigen::MatrixXd V = svd.matrixV();
+        Eigen::MatrixXd U = svd.matrixU();
+        Eigen::MatrixXd V = svd.matrixV();
 
-    //    // V.rightCols(V.cols() - r1).setZero();
-    //    V.conservativeResize(V.rows(), r1);
-    //    // U.rightCols(U.cols() - r1).setZero();
-    //    U.conservativeResize(U.rows(), r1);
-    //    s.conservativeResize(r1);
+        // V.rightCols(V.cols() - r1).setZero();
+        V.conservativeResize(V.rows(), r1);
+        // U.rightCols(U.cols() - r1).setZero();
+        U.conservativeResize(U.rows(), r1);
+        s.conservativeResize(r1);
 
-    //    s = s.array().inverse();
-    //    return V * s.asDiagonal() * U.transpose();
-    //}
-    //else
-    //{
-    //    return Eigen::MatrixXd::Constant(A.cols(), A.rows(), std::numeric_limits<double>::quiet_NaN());
-    //}
+        s = s.array().inverse();
+        return V * s.asDiagonal() * U.transpose();
+    }
+    else
+    {
+        return Eigen::MatrixXd::Constant(A.cols(), A.rows(), std::numeric_limits<double>::quiet_NaN());
+    }
 
-    auto toReturn = A.completeOrthogonalDecomposition();
-    toReturn.setThreshold(tol); // sets the threshold for which values should be considered to be 0
-    return Eigen::MatrixXd(toReturn.pseudoInverse());
+    //auto toReturn = A.completeOrthogonalDecomposition();
+    //toReturn.setThreshold(tol); // sets the threshold for which values should be considered to be 0
+    //return Eigen::MatrixXd(toReturn.pseudoInverse());
 }
 
 double deg2rad(double deg) {
@@ -1857,6 +1857,183 @@ Eigen::VectorXd inverseKinematics(Eigen::VectorXd &q, Eigen::VectorXd &qDot,
     return qNew;
 }
 
+std::vector<Eigen::VectorXd> inverseKinematicsRecord(Eigen::VectorXd& q, Eigen::VectorXd& qDot,
+    Eigen::VectorXd& displacementCalc,
+    Eigen::VectorXd tipVelocityDesired, int mode, int& outOfWorkspace) {
+
+    // these must be hardcoded
+    Eigen::Vector3d cushion; // deadband around joint limits
+    cushion << 0.01, 0.0, 0.5; // order is theta, phi, length with units of rad, rad, mm
+
+    int numSheaths = q.rows() / numConfigParams;
+    // these must be hardcoded
+    Eigen::VectorXd globalJointLowLimits(numConfigParams * numSheaths); // minimum allowable lengths/angles of the joints
+    globalJointLowLimits << 0.0000000000000001, -1000.0 * M_PI, lengthLowLimit, -q(5) / minAllowedRadii, -1000.0 * M_PI, lengthLowLimit, -q(8) / minAllowedRadii, -1000.0 * M_PI, lengthLowLimit;
+
+    // these must be hardcoded
+    Eigen::VectorXd globalJointHighLimits(numConfigParams * numSheaths); // maximum allowable lengths/angles of the joints
+    globalJointHighLimits << q(2) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit, q(5) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit, q(8) / minAllowedRadii, 1000.0 * M_PI, lengthHighLimit;
+
+    // perform differential kinematics calculation to obtain Jacobian
+    Eigen::MatrixXd J_normal = generateJacobian(q);
+
+    Eigen::MatrixXd J_use; // Jacobian that will be used for robot control
+    Eigen::VectorXd tipVelocityDesired_use; // desired input that will be used for robot control
+    std::vector<double> locked_joints; // non-actuated joints
+
+    switch (mode) {
+    case 0: // only position (3 DOF) with 5 DOF (no phi1 and sheath3)
+    {
+        locked_joints.push_back(1);
+        locked_joints.push_back(6);
+        locked_joints.push_back(7);
+        locked_joints.push_back(8);
+        // only grabs the top half of the Jacobian ie linear components
+        J_use = J_normal.block(0, 0, 3, numConfigParams_ * numSheaths);
+        // only grabs the top half of desired input ie x, y, z
+        tipVelocityDesired_use = tipVelocityDesired.head(3);
+        break;
+    }
+    case 1: // position and orientation with no roll (5 DOF) with 6 DOF robot (no phi1, theta3, and phi3)
+    {
+        locked_joints.push_back(1);
+        locked_joints.push_back(6);
+        locked_joints.push_back(7);
+        // J_use = J_normal.block(0, 0, 5, numConfigParams_ * numSheaths);
+        // tipVelocityDesired_use = tipVelocityDesired.head(5);
+        Eigen::MatrixXd temp1(4, numConfigParams_ * numSheaths);
+        temp1 << J_normal.row(0), J_normal.row(1), J_normal.row(2), J_normal.row(4);
+        J_use = temp1;
+
+        Eigen::VectorXd temp2(4);
+        temp2 << tipVelocityDesired(0), tipVelocityDesired(1), tipVelocityDesired(2), tipVelocityDesired(4);
+        tipVelocityDesired_use = temp2;
+        break;
+    }
+    default: // position and orientation (6 DOF) with 7 DOF robot (no phi1 and theta3)
+    {
+        locked_joints.push_back(1);
+        locked_joints.push_back(6);
+        J_use = J_normal;
+        tipVelocityDesired_use = tipVelocityDesired;
+    }
+    }
+
+    // calculate secondary task for null space manipulation (redundancy resolution)
+    Eigen::VectorXd nullspaceObjectiveVector = generateNullSpaceObjectiveVector(q,
+        jointMidPoints,
+        globalJointHighLimits,
+        globalJointLowLimits);
+
+    for (int i : locked_joints) {
+        J_use.col(i) = Eigen::VectorXd::Zero(J_use.rows());
+        nullspaceObjectiveVector(i) = 0.0;
+
+        switch (i % numConfigParams) {
+        case 1: // phi, units in rad
+            if (i == 1) {
+                globalJointLowLimits(i) = M_PI;
+                globalJointHighLimits(i) = M_PI;
+            }
+            else {
+                globalJointLowLimits(i) = 0.0;
+                globalJointHighLimits(i) = 0.0;
+            }
+            break;
+        case 2: // length, units in mm
+            globalJointLowLimits(i) = 1.0;
+            globalJointHighLimits(i) = 1.0;
+            break;
+        default: // theta, units in rad
+            globalJointLowLimits(i) = 0.01;
+            globalJointHighLimits(i) = 0.01;
+        }
+    }
+
+    // calculate joint velocities
+    qDot = calculateJointVelocities(J_use,
+        tipVelocityDesired_use,
+        nullspaceObjectiveVector,
+        locked_joints,
+        -1);
+
+    Eigen::VectorXd qNew = q + qDot * deltaT; // recalculate config params
+
+    int loop_counter = 0;
+    Eigen::VectorXd joints_exceeded(numSheaths * numConfigParams);
+    joints_exceeded.setZero();
+
+    if (applyJointLimits) {
+        bool finishedChecking = false;
+        int numJoints = numSheaths * numConfigParams;
+        Eigen::VectorXd limitHighJoint = globalJointHighLimits;
+        Eigen::VectorXd limitLowJoint = globalJointLowLimits;
+
+        while (!finishedChecking) {
+            // calculate joint limits dynamically
+            for (int i = 0; i < numSheaths; ++i) {
+                if (i > 0) {
+                    limitLowJoint(i * numConfigParams) = std::max(globalJointLowLimits(i * numConfigParams), -1.0 * (q(i * numConfigParams + 2) / minAllowedRadii)); // theta
+                }
+                else {
+                    limitLowJoint(i * numConfigParams) = std::max(globalJointLowLimits(i * numConfigParams), 0.0); // theta
+                }
+                limitLowJoint(i * numConfigParams + 2) = std::max(globalJointLowLimits(i * numConfigParams + 2), (q(i * numConfigParams) * minAllowedRadii)); // length
+
+                limitHighJoint(i * numConfigParams) = std::min(globalJointHighLimits(i * numConfigParams), (q(i * numConfigParams + 2) / minAllowedRadii)); // theta
+                limitHighJoint(i * numConfigParams + 2) = globalJointHighLimits(i * numConfigParams + 2); // length
+            }
+
+            int exceededJoint = 10;
+            // 
+            // find and save first joint that exceeds previously calculated joint limits
+            for (int j = 0; j < numJoints; ++j) {
+                if ((j % numConfigParams) != 1 &&
+                    (find_element(locked_joints, j) == -1) &&
+                    joints_exceeded(j) == 0) {
+                    if (qNew(j) < (limitLowJoint(j) + cushion((j % numConfigParams))) ||
+                        qNew(j) > (limitHighJoint(j) - cushion(j % numConfigParams))) {
+                        exceededJoint = j;
+                        if (qNew(j) > limitLowJoint(j) || qNew(j) < limitHighJoint(j)) {
+                            joints_exceeded(j) = 1;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (exceededJoint != 10) { // if a joint has exceeded the limits
+                //unemployed++;
+                J_use.col(exceededJoint) = Eigen::VectorXd::Zero(J_use.rows()); // wipe the column in the Jacobian of the current param
+                nullspaceObjectiveVector(exceededJoint) = 0.0; // wipe q_0_dot
+
+                // calculate joint velocities
+                qDot = calculateJointVelocities(J_use,
+                    tipVelocityDesired_use,
+                    nullspaceObjectiveVector,
+                    locked_joints,
+                    exceededJoint);
+
+                qNew = q + qDot * deltaT; // recalculate config params
+            }
+            else {
+                finishedChecking = true;
+            }
+            loop_counter++;
+        }
+    }
+
+    // update tendon displacements
+    //displacementCalc = jointSpaceToActuationSpace(qNew);
+
+    outOfWorkspace = (loop_counter > 1);
+    std::vector<Eigen::VectorXd> toReturn;
+    toReturn.push_back(qNew);
+    toReturn.push_back(qDot);
+
+    return toReturn;
+}
+
 std::pair<Eigen::Vector3d, Eigen::Vector3d> calculate_circleTrajectory_position_velocity_f(Eigen::Vector3d start_point,
     double elapsed_time,
     double tip_speed,
@@ -3277,7 +3454,7 @@ int main()
         automated_velocity = result.second;
 
         Eigen::VectorXd tipVelocityDesired(6); // command from manual control
-        tipVelocityDesired << automated_velocity(0), automated_velocity(1), automated_velocity(2), 0.0, 0.35 * (2.0 * M_PI / 500.0) * std::cos(j * ((2.0 * M_PI) / 500.0)), 0.0;
+        tipVelocityDesired << automated_velocity(0), automated_velocity(1), automated_velocity(2), 0.0, 0.7 * (2.0 * M_PI / 500.0) * std::cos(j * ((2.0 * M_PI) / 500.0)), 0.0;
 
         Eigen::VectorXd displacementCalc(nOfDrivenMotors);
         displacementCalc = Eigen::VectorXd::Zero(nOfDrivenMotors); // motor displacement
@@ -3299,7 +3476,7 @@ int main()
 
 
         forwardKinematics(q_sim, pTip_sim, dummyRotMM_i_wrtG);
-        writeVectorToCSV("C:/Users/ch256744/BCH Dropbox/Phillip Tran/ExtendedICRAPaper/AbdulsCode/MatlabCode/endtip_precise1021_20circle_2.csv", pTip_sim);
+        writeVectorToCSV("C:/Users/ch256744/BCH Dropbox/Phillip Tran/ExtendedICRAPaper/AbdulsCode/MatlabCode/endtip_precise1022_20circle40_1.csv", pTip_sim);
         unemployed += outOfWorkspace;
     }
 
