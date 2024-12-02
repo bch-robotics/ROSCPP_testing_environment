@@ -885,7 +885,7 @@ Eigen::VectorXd inverseKinematics(Eigen::VectorXd& q, Eigen::VectorXd& qDot,
             //locked_joints.push_back(7);
             J_use = J_normal.block(0, 0, 5, numConfigParams_ * numSheaths);
             tipVelocityDesired_use = tipVelocityDesired.head(5);
-            std::cout << "hello" << std::endl;
+            //std::cout << "hello" << std::endl;
             //Eigen::MatrixXd temp1(4, numConfigParams_ * numSheaths);
             //temp1 << J_normal.row(0), J_normal.row(1), J_normal.row(2), J_normal.row(4);
             //J_use = temp1;
@@ -1254,9 +1254,229 @@ Eigen::VectorXd createArray() {
     return arr;
 }
 
+double sortTan(double prev, double input) {
+    double a = abs(prev - input);
+    double b = abs(prev - (input + M_PI));
+    double c = abs(prev - (input - M_PI));
+    double d = abs(prev - (input + 2 * M_PI));
+    double e = abs(prev - (input - 2 * M_PI));
+
+    double toReturn = a;
+    double actualReturn = input;
+
+    if (toReturn > b) {
+        toReturn = b;
+        actualReturn = input + M_PI;
+    }
+
+    if (toReturn > c) {
+        toReturn = c;
+        actualReturn = input - M_PI;
+    }
+
+    if (toReturn > d) {
+        toReturn = d;
+        actualReturn = input + 2 * M_PI;
+    }
+
+    if (toReturn > e) {
+        toReturn = e;
+        actualReturn = input - 2 * M_PI;
+    }
+
+    return actualReturn;
+}
+
+Eigen::Vector3d rotToEulXYZ(Eigen::Matrix3d rot, Eigen::Vector3d prev_ang) {
+    Eigen::Vector3d toReturn = Eigen::Vector3d::Zero();
+
+    double diff;
+
+    double y1 = std::asin(rot(0, 2));
+    double x1 = std::atan2(rot(1, 2) / (-std::cos(y1)), rot(2, 2) / std::cos(y1));
+    double z1 = std::atan2(rot(0, 1) / (-std::cos(y1)), rot(0, 0) / std::cos(y1));
+    //double diff1 = (std::pow((prev_ang(0) - x1), 2) + std::pow((prev_ang(1) - y1), 2) + std::pow((prev_ang(2) - z1), 2));
+    diff = (std::pow(prev_ang(0) - sortTan(prev_ang(0), x1), 2) + std::pow(prev_ang(1)-y1, 2) + std::pow(prev_ang(2) - sortTan(prev_ang(2), z1), 2));
+    toReturn << sortTan(prev_ang(0), x1), y1, sortTan(prev_ang(2), z1);
+
+    double y2 = sgn(y1) * M_PI - y1;
+    double x2 = std::atan2(rot(1, 2) / (-std::cos(y2)), rot(2, 2) / std::cos(y2));
+    double z2 = std::atan2(rot(0, 1) / (-std::cos(y2)), rot(0, 0) / std::cos(y2));
+    double diff2 = (std::pow(prev_ang(0) - sortTan(prev_ang(0), x2), 2) + std::pow(prev_ang(1) - y2, 2) + std::pow(prev_ang(2) - sortTan(prev_ang(2), z2), 2));
+    if (diff2 < diff) {
+        toReturn << sortTan(prev_ang(0), x2), y2, sortTan(prev_ang(2), z2);
+        diff = diff2;
+    }
+   
+    double y3 = sgn(y1) * -M_PI - y1;
+    double x3 = std::atan2(rot(1, 2) / (-std::cos(y3)), rot(2, 2) / std::cos(y3));
+    double z3 = std::atan2(rot(0, 1) / (-std::cos(y3)), rot(0, 0) / std::cos(y3));
+    double diff3 = (std::pow(prev_ang(0) - sortTan(prev_ang(0), x3), 2) + std::pow(prev_ang(1) - y3, 2) + std::pow(prev_ang(2) - sortTan(prev_ang(2), z3), 2));
+    if (diff3 < diff) {
+        toReturn << sortTan(prev_ang(0), x3), y3, sortTan(prev_ang(2), z3);
+        diff = diff3;
+    }
+
+    double y4 = sgn(y1) * -2* M_PI + y1;
+    double x4 = std::atan2(rot(1, 2) / (-std::cos(y4)), rot(2, 2) / std::cos(y4));
+    double z4 = std::atan2(rot(0, 1) / (-std::cos(y4)), rot(0, 0) / std::cos(y4));
+    double diff4 = (std::pow(prev_ang(0) - sortTan(prev_ang(0), x4), 2) + std::pow(prev_ang(1) - y4, 2) + std::pow(prev_ang(2) - sortTan(prev_ang(2), z4), 2));
+    if (diff4 < diff) {
+        toReturn << sortTan(prev_ang(0), x4), y4, sortTan(prev_ang(2), z4);
+    }
+
+    return toReturn;
+}
+
+Eigen::Vector3d wrap2rel2PI(Eigen::Vector3d ang, Eigen::Vector3d init_ang) {
+    Eigen::Vector3d toReturn; // Initialize the output vector
+    for (int i = 0; i < 3; ++i) {
+        toReturn(i) = (ang(i) > (init_ang(i) + M_PI)) ? (ang(i) - 2 * M_PI) : ((ang(i) < (init_ang(i) - M_PI)) ? (ang(i) + 2 * M_PI) : (ang(i)));
+    }
+    return toReturn;
+}
+
+Eigen::MatrixXd generateJacobian2(Eigen::VectorXd q) {
+
+    int numSheaths = q.rows() / numConfigParams_;
+
+    Eigen::VectorXd theta(numSheaths);
+    Eigen::VectorXd phi(numSheaths);
+    Eigen::VectorXd length(numSheaths);
+
+    // separate and store config params
+    for (int i = 0; i < numSheaths; ++i) {
+        theta(i) = q(i * numConfigParams_);
+        phi(i) = q(i * numConfigParams_ + 1);
+        length(i) = q(i * numConfigParams_ + 2);
+    }
+
+    Eigen::MatrixXd J(6, numSheaths * numConfigParams_); // Jacobian matrix, 6x3n
+    J.setZero();
+
+    Eigen::Vector3d tip_pos; // position of tip of robot
+    Eigen::Matrix3d temp_matrix = Eigen::Matrix3d::Identity(); // placeholder matrix
+    forwardKinematics(q, tip_pos, temp_matrix); // get global robot tip position
+
+    for (int i = 0; i < numSheaths; ++i) {
+
+        Eigen::Vector3d prev_tip_pos = { 0.0, 0.0, 0.0 }; // tip position of previous segment chain
+        Eigen::Matrix3d prev_rot = Eigen::Matrix3d::Identity(); // orientation matrix of tip of previous segment chain
+
+        if (i > 0) {
+            forwardKinematics(q.segment(0, i * numConfigParams_), prev_tip_pos, prev_rot); // saves tip position and orientation of previous segment
+        }
+
+        Eigen::Vector3d pos_ith_tip = { 0.0, 0.0, 0.0 }; // tip position of current segment
+        Eigen::Matrix3d temp_matrix = Eigen::Matrix3d::Identity(); // Not used in this function call
+        forwardKinematics(q.segment(0, (i + 1) * (numConfigParams_)), pos_ith_tip, temp_matrix); // saves tip position of current segment
+
+        /** Jacobian formulation **/
+        Eigen::MatrixXd M_i(6, 6);
+        M_i << Eigen::Matrix3d::Identity(), -1 * skew(tip_pos - pos_ith_tip),
+            Eigen::Matrix3d::Zero(), Eigen::Matrix3d::Identity();
+
+        Eigen::Vector3d J_v_i_correspondingToTheta = prev_rot * getRotz_rad(phi(i)) *
+            Eigen::Vector3d(
+                length(i) * (-1.0 * std::pow((theta(i) + (1e-6)), -2) + std::pow((theta(i) + (1e-6)), -2) * std::cos(theta(i)) + std::pow((theta(i) + (1e-6)), -1) * std::sin(theta(i))),
+                0.0,
+                length(i) * (-1.0 * std::pow((theta(i) + (1e-6)), -2) * std::sin(theta(i)) + std::pow((theta(i) + (1e-6)), -1) * std::cos(theta(i))));
+
+        Eigen::Vector3d J_v_i_correspondingToPhi = prev_rot * (length(i) / (theta(i) + (1e-6))) * Eigen::Vector3d(-1.0 * std::sin(phi(i)) * (1.0 - std::cos(theta(i))), std::cos(phi(i)) * (1.0 - std::cos(theta(i))), 0.0);
+
+        Eigen::Vector3d J_v_i_correspondingToLength = prev_rot * getRotz_rad(phi(i)) * Eigen::Vector3d(std::pow((theta(i) + (1e-6)), -1) * (1.0 - std::cos(theta(i))), 0.0, std::pow((theta(i) + (1e-6)), -1) * std::sin(theta(i)));
+
+        Eigen::MatrixXd J_v_i(3, numConfigParams_); // holds all upper components of the Jacobian
+        J_v_i << J_v_i_correspondingToTheta, J_v_i_correspondingToPhi, J_v_i_correspondingToLength;
+
+        Eigen::Vector3d e2(0.0, 1.0, 0.0);
+        Eigen::Vector3d e3(0.0, 0.0, 1.0);
+        Eigen::MatrixXd J_w_i(3, numConfigParams_);
+        J_w_i << prev_rot * getRotz_rad(phi(i)) * e2, prev_rot* e3, Eigen::Vector3d::Zero();
+
+        Eigen::MatrixXd J_i(6, numConfigParams_);
+        J_i << J_v_i, J_w_i;
+
+        // performs adjoint transformation M_i (6x6) on
+        // each sub-Jacobian J_i (6x3) and places the
+        // resulting 6x3 matrix into the J matrix
+        J.block(0, i * numConfigParams_, 6, numConfigParams_) = M_i * J_i;
+
+    }
+
+    return J;
+}
+
+void calculateJointVelocities2(Eigen::MatrixXd J,
+    Eigen::VectorXd tipVelocityDesired, Eigen::VectorXd nullspaceObjectiveVector,
+    Eigen::VectorXd &qDot, Eigen::VectorXd &imagespace, Eigen::VectorXd &nullspace) {
+    double toler = 0.002; // used in rank estimation for pinv
+
+    int numSheaths = J.cols() / numConfigParams_;
+    // calculate pseudoinverse of Jacobian
+    Eigen::MatrixXd pinvJ = J.transpose() *
+        pinv(J * J.transpose() + (1e-6) * Eigen::MatrixXd::Identity(J.rows(), J.rows()), toler);
+    // calculate image space
+    Eigen::VectorXd imageSpace = pinvJ * tipVelocityDesired;
+    // calculate nullspace
+    Eigen::VectorXd nullSpace = (Eigen::MatrixXd::Identity((numSheaths * numConfigParams_), (numSheaths * numConfigParams_)) - pinvJ * J) *
+        redundancyResolutionOn *
+        nullspaceObjectiveVector;
+    // calculate joint velocities
+    qDot = imageSpace + nullSpace;
+    imagespace = imageSpace;
+    nullspace = nullSpace;
+}
+
+void readCSVMatrix(const std::string& filename, std::map<int, Eigen::Matrix3d>& toReturn) {
+    std::vector<std::vector<double>> data;
+    std::ifstream file(filename);
+    std::string line;
+
+    while (std::getline(file, line)) {
+        std::vector<double> row;
+        std::stringstream ss(line);
+        std::string cell;
+
+        while (std::getline(ss, cell, ',')) {
+            try {
+                double value = std::stod(cell);
+                row.push_back(value);
+            }
+            catch (const std::invalid_argument& e) {
+                // Handle non-numeric data (e.g., headers)
+                // For simplicity, we'll skip this cell
+                continue;
+            }
+            catch (const std::out_of_range& e) {
+                // Handle out of range errors
+                std::cerr << "Error: Number out of range - " << cell << std::endl;
+                continue;
+            }
+        }
+
+        if (!row.empty()) {
+            data.push_back(row);
+        }
+    }
+
+    int othercount = 0;
+    // Access data like a 2D vector
+    for (const auto& row : data) {
+        Eigen::Matrix3d input = Eigen::Matrix3d::Identity();
+        int count = 0;
+        for (const auto& value : row) {
+            input(count) = value;
+            count++;
+        }
+        toReturn[othercount] = input;
+        othercount++;
+    }
+}
+
 int main()
 {
-    fesetround(FE_TONEAREST); // Round to nearest (even) like MATLAB
+    //fesetround(FE_TONEAREST); // Round to nearest (even) like MATLAB
 
     theta_init_ << deg2rad(25), deg2rad(25), 0.00005; // initial bending angles of each sheath
     phi_init_ << 180.0 * M_PI / 180.0, -90.0 * M_PI / 180.0, 0.0 * M_PI / 180.0; // initial bending plane offsets of each sheath
@@ -1268,9 +1488,9 @@ int main()
 
     jointMidPoints << M_PI / 4.0, 0, 25.0, 0.0, 0.0, 25.0, 0.0, 0.0, 25.0;
 
-    maxJointSpeed << M_PI / 6.0, 1000.0 * M_PI, 3,
-        M_PI / 6.0, 1000.0 * M_PI, 3,
-        M_PI / 6.0, 1000.0 * M_PI, 3;
+    maxJointSpeed << M_PI / 6.0, 1000.0 * M_PI, 6.0,
+        M_PI / 6.0, 1000.0 * M_PI, 6.0,
+        M_PI / 6.0, 1000.0 * M_PI, 6.0;
 
     Eigen::MatrixXd tendonAngOffsets(numTotalTubes, numTendonsPerTube);
     tendonAngOffsets.row(0) << -1.0 * M_PI, -1.0 * 3.0 * M_PI / 2.0; // outer sheath
@@ -1286,92 +1506,180 @@ int main()
         invTendonGeometry[i] = tendonGeometry[i].inverse();
     }
 
-    for (int i = 0; i < numTubes; ++i) {
-        q_sim.segment((i * numConfigParams), numConfigParams) << theta_init_(i), phi_init_(i), length_init_(i);
-    }
+    Eigen::VectorXd q2(9);
+    Eigen::VectorXd xdot(3);
+    Eigen::VectorXd ns(9);
 
-    std::vector<std::vector<double>> test;
-    readCSVDub("C:\\Users\\ch256744\\BCH Dropbox\\Phillip Tran\\ExtendedICRAPaper\\more experiments 1\\test2.csv", test);
+    q2 << 0.206490867,	3.141592654,	23.872,	1.207449508, -1.615709922,	15.228,	5.00E-05,	0,	0.516;
+    xdot << -0.795772196,	0.574894668,	0.364703211;
+    ns << 0.001144692,	0, -0.003203685,	0, -0.003210294,	0.002324936,	0,	0,	0;
 
-    std::vector<double> desired;
-    std::vector<double> actual;
-    std::vector<double> actual2;
-    for (int i = 0; i < test.size(); ++i) {
-        for (int j = 0; j < test[i].size(); ++j) {
-            //std::cout << test[i][j] << std::endl;
-            if (j == 3) {
-                desired.push_back(test[i][j]);
-            }
+    Eigen::MatrixXd J_normal = generateJacobian2(q2);
+    Eigen::MatrixXd J_use;
+    J_use = J_normal.block(0, 0, 3, numConfigParams_ * 3);
 
-            if (j == 9) {
-                actual.push_back(test[i][j]);
-            }
-
-            if (j == 8) {
-                actual2.push_back(test[i][j]);
-            }
-        }
-    }
-
-    MedianFilter mf = MedianFilter(11);
-    MedianFilter mf2 = MedianFilter(11);
-
-    std::vector<MedianFilter> medfilt;
-    for (int i = 0; i < 2; ++i) {
-        medfilt.push_back(MedianFilter(11));
-    }
-
-    std::vector<SlidingModeFilter> slidingfilt;
-    for (int i = 0; i < 2; ++i) {
-        slidingfilt.push_back(SlidingModeFilter(1, 1, 1, 0.01));
-    }
-
-    std::vector<double> temp;
-    std::vector<double> temp2;
-    std::vector<double> temp3;
-
-    for (int i = 0; i < desired.size(); ++i) {
-       temp.push_back(mf.filter(desired[i]));
-       //temp2.push_back(medfilt[0].filter(actual[i]));
-       //temp3.push_back(medfilt[1].filter(actual2[i]));
-       temp2.push_back(slidingfilt[0].filter(actual[i]));
-       temp3.push_back(slidingfilt[1].filter(actual2[i]));
-    }
-
-    //writeCSV("C:/Users/ch256744/BCH Dropbox/Phillip Tran/ExtendedICRAPaper/AbdulsCode/MatlabCode/medfilttest63.csv", temp3);
-    //writeCSV("C:/Users/ch256744/BCH Dropbox/Phillip Tran/ExtendedICRAPaper/AbdulsCode/MatlabCode/medfilttest62.csv", temp2);
-
-    Eigen::Matrix3d dummyRotMM_i_wrtG1 = Eigen::Matrix3d::Identity();
-    forwardKinematics(q_sim, pTip_init_sim, dummyRotMM_i_wrtG1);
-
-    for (int j = 0; j < 10000; ++j) {
-        auto time = j * deltaT;
-        Eigen::Matrix3d dummyRotMM_i_wrtG = Eigen::Matrix3d::Identity();
+    Eigen::VectorXd qDot2(9);
+    Eigen::VectorXd imagespace(9);
+    Eigen::VectorXd nullspace(9);
         
-        forwardKinematics(q_sim, pTip_sim, dummyRotMM_i_wrtG);
+    calculateJointVelocities2(J_use, xdot, ns, qDot2, imagespace, nullspace);
 
-        std::pair<Eigen::Vector3d, Eigen::Vector3d> result =
-            calculate_circleTrajectory_position_velocity_f(pTip_init_sim, time, 0.25, outOfWorkspace, pTip_sim);
-        automated_velocity = result.second;
+    std::cout << "qdot: " << qDot2 << "\n" << std::endl;
+    std::cout << "imagespace: " << imagespace << "\n" << std::endl;
+    std::cout << "nullspace: " << nullspace << "\n" << std::endl;
 
-        Eigen::VectorXd tipVelocityDesired(6); // command from manual control
-        tipVelocityDesired << automated_velocity(0), automated_velocity(1), automated_velocity(2), 0.7 * (2.0 * M_PI / 500.0) * std::cos(j * ((2.0 * M_PI) / 500.0)), 0.7 * (2.0 * M_PI / 500.0) * std::cos(j * ((2.0 * M_PI) / 500.0)), 0.0;
+    Eigen::MatrixXd A(2,3);
 
-        Eigen::VectorXd displacementCalc(nOfDrivenMotors);
-        displacementCalc = Eigen::VectorXd::Zero(nOfDrivenMotors); // motor displacement
+    A << 1e-6, 0, 0, 1e-12, 0, 0;
 
-        //writeVectorToCSV("C:/Users/ch256744/Downloads/q_output_precise.csv", q_sim);
-        //writeVectorToCSV("C:/Users/ch256744/Downloads/qdot_output_precise.csv", qDot_sim);
-        //writeVectorToCSV("C:/Users/ch256744/Downloads/tipspeed_output_precise.csv", tipVelocityDesired);
-        
-        q_sim = inverseKinematics(q_sim, qDot_sim, displacement_sim, tipVelocityDesired, operatingMode, outOfWorkspace);
-        Eigen::MatrixXd jacobian = generateJacobian(q_sim);
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeThinU | Eigen::ComputeThinV);
+    Eigen::VectorXd s = svd.singularValues();
 
+    if (!s.isZero(0)) {
+        int r1 = (s.array() > 0.002).count(); // estimate effective rank
+        r1 = std::max(r1, 1);
+        std::cout << "r1: " << r1 << std::endl;
 
-        forwardKinematics(q_sim, pTip_sim, dummyRotMM_i_wrtG);
-        writeVectorToCSV("C:/Users/ch256744/BCH Dropbox/Phillip Tran/ExtendedICRAPaper/AbdulsCode/MatlabCode/again6.csv", pTip_sim);
-        unemployed += outOfWorkspace;
+        Eigen::MatrixXd U = svd.matrixU();
+        Eigen::MatrixXd V = svd.matrixV();
+
+        std::cout << "U: " << U << "\n" << std::endl;
+        std::cout << "V: " << V << "\n" << std::endl;
+        std::cout << "s: " << s << "\n" << std::endl;
+
+        // V.rightCols(V.cols() - r1).setZero();
+        V.conservativeResize(V.rows(), r1);
+        // U.rightCols(U.cols() - r1).setZero();
+        U.conservativeResize(U.rows(), r1);
+        s.conservativeResize(r1);
+
+        s = s.array().inverse();
+        std::cout << "s inverse: " << s << "\n" << std::endl;
+        std::cout << "s diagonal: " << Eigen::MatrixXd(s.asDiagonal()) << "\n" << std::endl;
+
+        //Eigen::VectorXd test(s.size());
+        //for (int i = 0; i < test.size(); ++i) {
+        //    if (s(i) > 0.8) {
+        //        test(i) = 1 / s(i);
+        //    }
+        //    else {
+        //        test(i) = 0;
+        //    }
+        //}
+
+        std::cout << V * s.asDiagonal() * U.transpose() << std::endl;
+        std::cout << A * (V * s.asDiagonal() * U.transpose()) << std::endl;
+        //std::cout << V * test.asDiagonal() * U.transpose() << std::endl;
     }
+
+    std::cout << q2.array().inverse() << std::endl;
+
+    //for (int i = 0; i < numTubes; ++i) {
+    //    q_sim.segment((i * numConfigParams), numConfigParams) << theta_init_(i), phi_init_(i), length_init_(i);
+    //}
+
+    //std::vector<std::vector<double>> test;
+    //readCSVDub("C:\\Users\\ch256744\\BCH Dropbox\\Phillip Tran\\ExtendedICRAPaper\\more experiments 1\\test2.csv", test);
+
+    //std::vector<double> desired;
+    //std::vector<double> actual;
+    //std::vector<double> actual2;
+    //for (int i = 0; i < test.size(); ++i) {
+    //    for (int j = 0; j < test[i].size(); ++j) {
+    //        //std::cout << test[i][j] << std::endl;
+    //        if (j == 3) {
+    //            desired.push_back(test[i][j]);
+    //        }
+
+    //        if (j == 9) {
+    //            actual.push_back(test[i][j]);
+    //        }
+
+    //        if (j == 8) {
+    //            actual2.push_back(test[i][j]);
+    //        }
+    //    }
+    //}
+
+    //MedianFilter mf = MedianFilter(11);
+    //MedianFilter mf2 = MedianFilter(11);
+
+    //std::vector<MedianFilter> medfilt;
+    //for (int i = 0; i < 2; ++i) {
+    //    medfilt.push_back(MedianFilter(11));
+    //}
+
+    //std::vector<SlidingModeFilter> slidingfilt;
+    //for (int i = 0; i < 2; ++i) {
+    //    slidingfilt.push_back(SlidingModeFilter(1, 1, 1, 0.01));
+    //}
+
+    //std::vector<double> temp;
+    //std::vector<double> temp2;
+    //std::vector<double> temp3;
+
+    //for (int i = 0; i < desired.size(); ++i) {
+    //   temp.push_back(mf.filter(desired[i]));
+    //   //temp2.push_back(medfilt[0].filter(actual[i]));
+    //   //temp3.push_back(medfilt[1].filter(actual2[i]));
+    //   temp2.push_back(slidingfilt[0].filter(actual[i]));
+    //   temp3.push_back(slidingfilt[1].filter(actual2[i]));
+    //}
+
+    ////writeCSV("C:/Users/ch256744/BCH Dropbox/Phillip Tran/ExtendedICRAPaper/AbdulsCode/MatlabCode/medfilttest63.csv", temp3);
+    ////writeCSV("C:/Users/ch256744/BCH Dropbox/Phillip Tran/ExtendedICRAPaper/AbdulsCode/MatlabCode/medfilttest62.csv", temp2);
+
+    //Eigen::Matrix3d dummyRotMM_i_wrtG1 = Eigen::Matrix3d::Identity();
+    //forwardKinematics(q_sim, pTip_init_sim, dummyRotMM_i_wrtG1);
+
+    ////for (int j = 0; j < 5000; ++j) {
+    ////    auto time = j * deltaT;
+    ////    Eigen::Matrix3d dummyRotMM_i_wrtG = Eigen::Matrix3d::Identity();
+    ////    
+    ////    forwardKinematics(q_sim, pTip_sim, dummyRotMM_i_wrtG);
+
+    ////    std::pair<Eigen::Vector3d, Eigen::Vector3d> result =
+    ////        calculate_circleTrajectory_position_velocity_f(pTip_init_sim, time, 0.5, outOfWorkspace, pTip_sim);
+    ////    automated_velocity = result.second;
+
+    ////    Eigen::VectorXd tipVelocityDesired(6); // command from manual control
+    ////    tipVelocityDesired << automated_velocity(0), automated_velocity(1), automated_velocity(2), 0.0, 0.7 * ((2*M_PI) / 500.0) * std::cos(j * ((2 * M_PI) / 500.0)), 0.7 * ((2 * M_PI) / 500.0) * std::cos(j * ((2 * M_PI) / 500.0));
+
+    ////    Eigen::VectorXd displacementCalc(nOfDrivenMotors);
+    ////    displacementCalc = Eigen::VectorXd::Zero(nOfDrivenMotors); // motor displacement
+
+    ////    //writeVectorToCSV("C:/Users/ch256744/Downloads/q_output_precise.csv", q_sim);
+    ////    //writeVectorToCSV("C:/Users/ch256744/Downloads/qdot_output_precise.csv", qDot_sim);
+    ////    //writeVectorToCSV("C:/Users/ch256744/Downloads/tipspeed_output_precise.csv", tipVelocityDesired);
+    ////    
+    ////    q_sim = inverseKinematics(q_sim, qDot_sim, displacement_sim, tipVelocityDesired, operatingMode, outOfWorkspace);
+    ////    Eigen::MatrixXd jacobian = generateJacobian(q_sim);
+
+
+    ////    forwardKinematics(q_sim, pTip_sim, dummyRotMM_i_wrtG);
+    ////    writeVectorToCSV("C:/Users/ch256744/BCH Dropbox/Phillip Tran/ExtendedICRAPaper/AbdulsCode/MatlabCode/unlock3.csv", pTip_sim);
+    ////    unemployed += outOfWorkspace;
+    ////}
+
+    //Eigen::MatrixXd t = Eigen::MatrixXd::Identity(4, 4);
+    //std::cout << t << std::endl;
+
+    //Eigen::VectorXd b(4);
+    //b << 1, 2, 3, 4;
+    //std::cout << b.head(3) << std::endl;
+    //Eigen::MatrixXd n(4,4);
+    //n << 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16;
+    //std::cout << n.block(0,0,3,3).transpose() << std::endl;
+
+    //auto p = getRotx(-177.34) * getRoty(-142.842) * getRotz(0.0024);
+    //Eigen::Vector3d c;
+    //c << deg2rad(2.64946), deg2rad(-37.1817), deg2rad(179.998);
+    //Eigen::Vector3d u;
+    //u << deg2rad(-2.023), deg2rad(-46.8271), deg2rad(177.134);
+    ////auto g = wrap2rel2PI(rotToEulXYZ(p, c), u);
+    //auto g = wrap2rel2PI(rotToEulXYZ(p, c), u);
+    //std::cout << "Ans: " << rad2deg(g(0)) << " " << rad2deg(g(1)) << " " << rad2deg(g(2)) << std::endl;
+    //std::cout << std::cos(179.9998) << std::endl;
 };
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
