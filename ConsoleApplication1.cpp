@@ -1428,7 +1428,7 @@ void calculateJointVelocities2(Eigen::MatrixXd J,
     nullspace = nullSpace;
 }
 
-void readCSVMatrix(const std::string& filename, std::map<int, Eigen::Matrix3d>& toReturn) {
+void readCSVMatrix(const std::string& filename, std::map<int, std::vector<double>>& toReturn) {
     std::vector<std::vector<double>> data;
     std::ifstream file(filename);
     std::string line;
@@ -1463,10 +1463,57 @@ void readCSVMatrix(const std::string& filename, std::map<int, Eigen::Matrix3d>& 
     int othercount = 0;
     // Access data like a 2D vector
     for (const auto& row : data) {
-        Eigen::Matrix3d input = Eigen::Matrix3d::Identity();
+        std::vector<double> input;
         int count = 0;
         for (const auto& value : row) {
-            input(count) = value;
+            input.push_back(value);
+            count++;
+        }
+        std::cout << count << std::endl;
+        toReturn[othercount] = input;
+        othercount++;
+    }
+}
+
+void readCSVMultiline(const std::string& filename, std::map<int, std::vector<double>>& toReturn) {
+    std::vector<std::vector<double>> data;
+    std::ifstream file(filename);
+    std::string line;
+
+    while (std::getline(file, line)) {
+        std::vector<double> row;
+        std::stringstream ss(line);
+        std::string cell;
+
+        while (std::getline(ss, cell, ',')) {
+            try {
+                double value = std::stod(cell);
+                row.push_back(value);
+            }
+            catch (const std::invalid_argument& e) {
+                // Handle non-numeric data (e.g., headers)
+                // For simplicity, we'll skip this cell
+                continue;
+            }
+            catch (const std::out_of_range& e) {
+                // Handle out of range errors
+                std::cerr << "Error: Number out of range - " << cell << std::endl;
+                continue;
+            }
+        }
+
+        if (!row.empty()) {
+            data.push_back(row);
+        }
+    }
+
+    int othercount = 0;
+    // Access data like a 2D vector
+    for (const auto& row : data) {
+        std::vector<double> input;
+        int count = 0;
+        for (const auto& value : row) {
+            input.push_back(value);
             count++;
         }
         toReturn[othercount] = input;
@@ -1478,7 +1525,7 @@ int main()
 {
     //fesetround(FE_TONEAREST); // Round to nearest (even) like MATLAB
 
-    theta_init_ << deg2rad(25), deg2rad(25), 0.00005; // initial bending angles of each sheath
+    /* theta_init_ << deg2rad(25), deg2rad(25), 0.00005; // initial bending angles of each sheath
     phi_init_ << 180.0 * M_PI / 180.0, -90.0 * M_PI / 180.0, 0.0 * M_PI / 180.0; // initial bending plane offsets of each sheath
     length_init_ << 10.0, 10.0, 10.0; // initial length of the steerable section of each sheath in mm
     delta_ << 2.3, 1.8, 1.0; // radius (in meters) of cross sectional circle centered at sheath centerline and passes through the tendon locations
@@ -1572,7 +1619,7 @@ int main()
         //std::cout << V * test.asDiagonal() * U.transpose() << std::endl;
     }
 
-    std::cout << q2.array().inverse() << std::endl;
+    std::cout << q2.array().inverse() << std::endl; */
 
     //for (int i = 0; i < numTubes; ++i) {
     //    q_sim.segment((i * numConfigParams), numConfigParams) << theta_init_(i), phi_init_(i), length_init_(i);
@@ -1680,6 +1727,56 @@ int main()
     //auto g = wrap2rel2PI(rotToEulXYZ(p, c), u);
     //std::cout << "Ans: " << rad2deg(g(0)) << " " << rad2deg(g(1)) << " " << rad2deg(g(2)) << std::endl;
     //std::cout << std::cos(179.9998) << std::endl;
+
+    //std::map<int, std::vector<double>> test;
+    //readCSVMatrix("C:\\Users\\ch256744\\BCH Dropbox\\Phillip Tran\\ExtendedICRAPaper\\ActualExperiments\\PathFollowingWithKinematicRedundancy\\M.csv", test);
+    //auto a = test[2];
+    //std::cout << a[23000] << std::endl;
+
+    //std::map<int, std::vector<double>> calib_holder;
+    //std::vector<double> l1;
+    //std::vector<double> l2;
+    //std::vector<double> tdOS;
+    //std::vector<double> td45;
+    //std::vector<double> td135;
+    //std::vector<double> td225;
+    //std::vector<double> td315;
+    //readCSVMultiline("C:\\Users\\ch256744\\BCH Dropbox\\Phillip Tran\\ExtendedICRAPaper\\more experiments 1\\CalibrationInputOS.csv", calib_holder);
+    //l2 = calib_holder[0];
+    //td45 = calib_holder[1];
+    //td135 = calib_holder[2];
+    //td225 = calib_holder[3];
+    //td315 = calib_holder[4];
+    //std::cout << l2[9900] << std::endl;
+    //for (int i = l2.size() - 101; i < l2.size(); ++i) {
+    //    std::cout << "l2: " << l2[i] << std::endl;
+    //}
+
+    //Eigen::Vector3d length;
+    //length << 1, 20, 0;
+    //double phi_pos = 0;
+    //Eigen::Vector3d phi;
+    //phi << 0, -2, 0;
+    //int i = 1;
+    //Eigen::Vector2d f;
+    //f << 1, 1;
+
+    //double p = 0.865 + 0.0067 * length(1);
+    //double q = 2.235 - 0.0067 * length(1);
+    //double r = 7.465 + 0.1267 * length(1);
+
+    ////double sol1 = (f(0) * ((0.003818 * length(i) + 0.02101))) / std::cos((phi_pos + phi(i - 1)) + (1e-8));
+    ////double sol2 = (f(1) * ((0.003818 * length(i) + 0.02101))) / std::sin((phi_pos + phi(i - 1)) + (1e-8));
+
+    //double sol1 = f(0) / (std::cos(phi_pos + phi(i - 1) + (1e-8)));
+    //sol1 = 6;
+    //sol1 = p * sol1 * (std::abs(sol1) < q) + ((r * sol1) - (sgn(sol1)) * (q * (r - p))) * (std::abs(sol1) >= q);
+    ///*sol1 = deg2rad(sol1);*/
+
+    //std::cout << "sol1: " << sol1 << std::endl;
+
+    double a = 4.0;
+    std::cout << 3 * (a > 3.0) << std::endl;
 };
 
 // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
